@@ -25,6 +25,7 @@ struct command_node{
 struct token_node{
   /* token_node: token node for linked list*/
   enum token_type type;
+  unsigned int line_num;
   struct token_node* next;
 };
 
@@ -203,29 +204,34 @@ void command_free(struct command_stack *stack)
     }
 }
 
-void token_push(struct token_stack* stack, enum token_type type)
+void token_push(struct token_stack* stack, enum token_type type, unsigned int line_num)
 {
   //create a new node
   struct token_node* node = (struct token_node*)checked_malloc(sizeof(struct token_node));
 
   node->type = type;	//shallow copy because command_t is a pointer?
+  node->line_num = line_num;
   node->next = stack->top;
 
   stack->top = node;
 }
 
-enum token_type token_pop(struct token_stack* stack)
+enum token_type token_pop(struct token_stack* stack, unsigned int *token_line_num)
 {
   struct token_node* node = stack->top;
   if(node != NULL)
     {
       stack->top = stack->top->next;
       enum token_type res = node->type;
-      free(node);	
+      *token_line_num = node->line_num;
+      free(node);
       return res;
     }
   else
-    return TOKEN_EMPTY;
+    {
+      *token_line_num = 0;
+      return TOKEN_EMPTY;
+    }
 }
 
 //get stack top, but do not delete it
@@ -279,20 +285,22 @@ static struct command_stream CmdStream;
 //decide whether c is a word
 bool isword(char c)
 {
-  return (isalnum(c)||c=='!'||c=='%'||c=='+'||c=='-'||c=='/'||c==':'||c=='@'||c=='^'||c=='_'||c=='.');	
+  return (isalnum(c)||c=='!'||c=='%'||c=='+'||c=='-'||c=='/'||c==':'
+	  ||c=='@'||c=='^'||c=='_'||c=='.'); 
 }
 //decide whether c is a whitespace/tab
 bool iswhitespace(char c)
 {
-  return c==' '||c=='	';
+  return c==' '||c=='\t';
 }
 //Syntax error
 void on_syntax(int line_count)
 {
-  printf("line %d errors", line_count);
+  //printf("line %d errors", line_count);
   //token_free(&TokenStack);
   //word_free(&WordStack);
   //command_free(&CmdStack);
+  fprintf(stderr, "%d:", line_count);
   exit(-1);
 }
 /////////////////////////////////////////////////////////////////////////////
@@ -302,17 +310,12 @@ void on_syntax(int line_count)
  * return false iff. there are syntax errors
  */
 
-
-
-
-
-
 bool 
 exec_token(enum token_type token, 
 	   const char* input, 
 	   const char* output)
 {
-  printf("exe token: %d\n", token);
+  //printf("exe token: %d\n", token);
   switch(token)
     {
     case INPUT:
@@ -468,34 +471,52 @@ exec_token(enum token_type token,
 bool
 on_token(enum token_type token, 
 	 const char* input, 
-	 const char* output)
+	 const char* output,
+	 unsigned int token_line_num, 
+	 unsigned int *err_line_num)
 {
+  unsigned int old_token_line_num = 0;
   switch (token)
     {
     case L_BRA:	//"("
       {
-	token_push(&TokenStack, token);
+	token_push(&TokenStack, token, token_line_num);
 	break;
       }
     case R_BRA:	//")"
       {
-	enum token_type old_token = token_pop(&TokenStack);
+	enum token_type old_token = token_pop(&TokenStack, &old_token_line_num);
 	while(old_token != L_BRA && old_token != TOKEN_EMPTY)
 	  {
 	    //recursively pop operator, execute it, and push the result into CmdStack		
 	    //TODO: CALL exec_token() over old_token
 	    if(exec_token(old_token, NULL, NULL)) //old_token should not be I/O redirection			
-	      old_token = token_pop(&TokenStack);
+	      old_token = token_pop(&TokenStack, &old_token_line_num);
 	    else	//syntax errors
-	      return false;
+	      {
+		*err_line_num = old_token_line_num;
+		return false;
+	      }
+	      
 	  }
 	if(old_token == TOKEN_EMPTY)	//parenthese mismatch
-	  return false;
+	  {
+	    *err_line_num = old_token_line_num;
+	    return false;
+	  }
 	//create a subshell command
 	command_t cmd = command_pop(&CmdStack);
-	if(cmd==NULL) return false;
+	if(cmd==NULL) 
+	  {
+	    *err_line_num = token_line_num;
+	    return false;
+	  }
 	command_t new_cmd = (command_t)checked_malloc(sizeof(struct command));
-	if(new_cmd==NULL)return false;
+	if(new_cmd==NULL)
+	  {
+	    *err_line_num = token_line_num;
+	    return false;
+	  }
 
 	new_cmd->type = SUBSHELL_COMMAND;
 	new_cmd->status = 0;
@@ -506,29 +527,21 @@ on_token(enum token_type token,
       }
     case NEWLINE:
       {
-	enum token_type old_token = token_pop(&TokenStack);
+	enum token_type old_token = token_pop(&TokenStack, &old_token_line_num);
 	while(old_token != L_BRA && old_token != TOKEN_EMPTY)
 	  {
 	    //recursively pop operator, execute it, and push the result into CmdStack		
 	    //TODO: CALL exec_token() over old_token
 	    if(exec_token(old_token, NULL, NULL)) //old_token should not be I/O redirection			
-	      old_token = token_pop(&TokenStack);
+	      old_token = token_pop(&TokenStack, &old_token_line_num);
 	    else	//syntax errors
-	      return false;
+	      {
+		*err_line_num = old_token_line_num;
+		return false;
+	      }
 	  } 
 	if (old_token == L_BRA)
-	  token_push(&TokenStack, L_BRA);
-	//create a subshell command
-	//command_t cmd = command_pop(&CmdStack);
-	//if(cmd==NULL) return false;
-	//command_t new_cmd = (command_t)checked_malloc(sizeof(struct command));
-	//if(new_cmd==NULL)return false;
-
-	//new_cmd->type = SUBSHELL_COMMAND;
-	//new_cmd->status = 0;
-	//new_cmd->input = NULL; new_cmd->output = NULL;
-	//new_cmd->u.subshell_command = cmd;
-	//command_push(&CmdStack, new_cmd);
+	  token_push(&TokenStack, L_BRA, token_line_num);
 	break;
       }
 
@@ -537,30 +550,36 @@ on_token(enum token_type token,
 	//compare priority, decide whether to push into stack, or pop and execute
 	enum token_priority lhs = GetPriority(token);
 	enum token_priority rhs = GetPriority(token_top(&TokenStack));
-	printf("token: %d\n", token);
+	//printf("token: %d\n", token);
 	if(lhs>rhs)
 	  {
 	    if(lhs==LEVEL_4)	//I/O redirection
 	      {
 		//TODO: call exec_token() over token
 		if(!exec_token(token, input, output))
-		  return false;		
+		  {
+		    *err_line_num = token_line_num;
+		    return false;		
+		  }
 	      }
 	    else
-	      token_push(&TokenStack, token);
+	      token_push(&TokenStack, token, token_line_num);
 	  }
 	else
 	  {
-	    enum token_type old_token = token_pop(&TokenStack);
-	    printf("pop token %d\n", old_token);
+	    enum token_type old_token = token_pop(&TokenStack, &old_token_line_num);
+	    //printf("pop token %d\n", old_token);
 	    //TODO: CALL exec_token() over old_token
 	    if(exec_token(old_token, NULL, NULL))	//old_token should not be I/O redirection
 	      {	
-		token_push(&TokenStack, token);
+		token_push(&TokenStack, token, token_line_num);
 
 	      }
 	    else	//syntax error
-	      return false;
+	      {
+		*err_line_num = token_line_num;
+		return false;
+	      }
 	  }
 	break;
       }
@@ -579,7 +598,7 @@ on_simple_cmd(char* cmd)
     return true;
 
   }
-  printf("on simple command: %s\n", cmd);
+  //printf("on simple command: %s\n", cmd);
   command_t new_cmd = (command_t)checked_malloc(sizeof(struct command));
   if(new_cmd==NULL) return false;
 
@@ -633,24 +652,28 @@ on_simple_cmd(char* cmd)
   //memset(nullword, 0, 1);
   wordbuf[word_cnt] = NULL;
 
-
   int k;
   for (k = 0; k < wordbuf_cnt; k ++) {
     //	printf("word #%d: %s\n", k, wordbuf[k]);
   }
   new_cmd ->u.word = wordbuf;
-  //strcpy(wordbuf, cmd);
-  //new_cmd->u.word = &wordbuf;
-  //new_cmd->u.word = (char**)checked_malloc(strlen(cmd)+1);
-  //if(new_cmd->u.word==NULL) return false;
-  //strcpy(*(new_cmd->u.word), cmd);
-  //	new_cmd->u.word = &cmd;
-  //
-
-
   //push into stack
   command_push(&CmdStack, new_cmd);
   return true;
+}
+
+void 
+increase_line_count (unsigned int *line_count, char newline_char, char *prev_newline_char)
+{
+  if (*prev_newline_char == '\r' && newline_char == '\n')
+    {
+      // not incrate line_count, take "\r\n" as a single newline
+    }
+  else
+    {
+      *line_count += 1;
+    }
+  *prev_newline_char = newline_char;
 }
 
 command_stream_t
@@ -672,7 +695,9 @@ make_command_stream (int (*get_next_byte) (void *),
   bool hold_on = false;	//true if no need to get a new char
   bool exit_loop = false;
   char c;
-  unsigned int line_count = 0;	//line count
+  unsigned int line_count = 1;	//line count
+  unsigned int err_line_num = 0;
+  char prev_newline_char = '\0';
   bool push_simple_cmd = false;
 
   while(true)
@@ -686,8 +711,8 @@ make_command_stream (int (*get_next_byte) (void *),
 	  {
 	    if(!on_simple_cmd(create_buf(&WordStack)))
 	      on_syntax(line_count);
-	    if(!on_token(L_BRA,NULL,NULL))
-	      on_syntax(line_count);
+	    if(!on_token(L_BRA,NULL,NULL, line_count, &err_line_num))
+	      on_syntax(err_line_num);
 	    break;
 	  }
 	case ')':
@@ -698,8 +723,8 @@ make_command_stream (int (*get_next_byte) (void *),
 	    }
 	    if(!on_simple_cmd(create_buf(&WordStack)))
 	      on_syntax(line_count);
-	    if(!on_token(R_BRA,NULL,NULL))
-	      on_syntax(line_count);
+	    if(!on_token(R_BRA,NULL,NULL, line_count, &err_line_num))
+	      on_syntax(err_line_num);
 	    break;
 	  }
 	case '&':
@@ -709,8 +734,8 @@ make_command_stream (int (*get_next_byte) (void *),
 	      on_syntax(line_count);
 	    if(!on_simple_cmd(create_buf(&WordStack)))
 	      on_syntax(line_count);
-	    if(!on_token(AND,NULL,NULL))
-	      on_syntax(line_count);
+	    if(!on_token(AND,NULL,NULL, line_count, &err_line_num))
+	      on_syntax(err_line_num);
 	    break;
 	  }
 	case '|':
@@ -720,16 +745,16 @@ make_command_stream (int (*get_next_byte) (void *),
 	      {
 		if(!on_simple_cmd(create_buf(&WordStack)))
 		  on_syntax(line_count);
-		if(!on_token(OR,NULL,NULL))
-		  on_syntax(line_count);
+		if(!on_token(OR,NULL,NULL, line_count, &err_line_num))
+		  on_syntax(err_line_num);
 	      }
 	    else	//PIPE
 	      {
 		hold_on = true;
 		if(!on_simple_cmd(create_buf(&WordStack)))
 		  on_syntax(line_count);
-		if(!on_token(PIPE,NULL,NULL))
-		  on_syntax(line_count);
+		if(!on_token(PIPE,NULL,NULL, line_count, &err_line_num))
+		  on_syntax(err_line_num);
 
 	      }
 	    break;
@@ -747,8 +772,8 @@ make_command_stream (int (*get_next_byte) (void *),
 	    }
 	    if(!on_simple_cmd(create_buf(&WordStack)))
 	      on_syntax(line_count);
-	    if(!on_token(SEMICOLON,NULL,NULL))
-	      on_syntax(line_count);
+	    if(!on_token(SEMICOLON,NULL,NULL, line_count, &err_line_num))
+	      on_syntax(err_line_num);
 	    break;
 	  }
 	case '#':	//comment
@@ -765,11 +790,13 @@ make_command_stream (int (*get_next_byte) (void *),
 	case '\r': case'\n':	//newline
 	  {
 	    bool comment = false;
+	    increase_line_count(&line_count, c, &prev_newline_char);
 	    while (1) {
 	      c = get_next_byte(get_next_byte_argument);
 	      if (c == EOF) {
 		break;
 	      } else if (c == '\r' ||  c == '\n') {
+		increase_line_count(&line_count, c, &prev_newline_char);
 		comment = false;
 		continue;
 	      } else if (iswhitespace(c)) {
@@ -789,8 +816,8 @@ make_command_stream (int (*get_next_byte) (void *),
 	      {
 		hold_on = true;
 		if (push_simple_cmd) {
-		  if (!on_token(NEWLINE, NULL, NULL))
-		    on_syntax(line_count);
+		  if (!on_token(NEWLINE, NULL, NULL, line_count, &err_line_num))
+		    on_syntax(err_line_num);
 		  push_simple_cmd = false;
 		} else {
 		  int buflen = WordStack.len;
@@ -798,8 +825,8 @@ make_command_stream (int (*get_next_byte) (void *),
 		    on_syntax(line_count);
 		  if (buflen != 0) {
 		    //printf("on token newline\n");
-		    if(!on_token(NEWLINE,NULL,NULL))
-		      on_syntax(line_count);
+		    if(!on_token(NEWLINE,NULL,NULL, line_count, &err_line_num))
+		      on_syntax(err_line_num);
 		  } else {
 		    //printf("not on token newline\n");
 
@@ -839,8 +866,8 @@ make_command_stream (int (*get_next_byte) (void *),
 	    }
 	    if(!on_simple_cmd(create_buf(&WordStack)))
 	      on_syntax(line_count);
-	    if(!on_token(INPUT,create_buf(&input),NULL))
-	      on_syntax(line_count);		
+	    if(!on_token(INPUT,create_buf(&input),NULL, line_count, &err_line_num))
+	      on_syntax(err_line_num);		
 	    break;
 	  }
 	case '>':
@@ -868,8 +895,8 @@ make_command_stream (int (*get_next_byte) (void *),
 	    }
 	    if(!on_simple_cmd(create_buf(&WordStack)))
 	      on_syntax(line_count);
-	    if(!on_token(OUTPUT, NULL, create_buf(&output)))
-	      on_syntax(line_count);		
+	    if(!on_token(OUTPUT, NULL, create_buf(&output), line_count, &err_line_num))
+	      on_syntax(err_line_num);		
 	    break;
 	  }
 	case EOF:
@@ -884,20 +911,24 @@ make_command_stream (int (*get_next_byte) (void *),
 		&& TokenStack.top->type == SEMICOLON) {
 	      TokenStack.top->type = SINGLE_SEMICOLON;
 	    }
-
-	    enum token_type old_token = token_pop(&TokenStack);
+	    
+	    unsigned int old_token_line_num = 1;
+	    enum token_type old_token = token_pop(&TokenStack, &old_token_line_num);
 	    while(old_token != TOKEN_EMPTY)
 	      {
 		//recursively pop operator, execute it, and push the result into CmdStack		
 		//TODO: CALL exec_token() over old_token
 		//printf("token: %d\n", old_token);
 		if(exec_token(old_token, NULL, NULL)) //old_token should not be I/O redirection			
-		  old_token = token_pop(&TokenStack);
+		  old_token = token_pop(&TokenStack, &old_token_line_num);
 		else	//syntax errors
-		  on_syntax(line_count);	//line_count may not be meaningful here
+		  {
+		   
+		    on_syntax(old_token_line_num);	//line_count may not be meaningful here
+		  }
 	      }
 	    if (CmdStack.top == NULL) {
-	      on_syntax(line_count);
+	      on_syntax(old_token_line_num);
 	    }
 	    //if(CmdStack.top->next!=NULL) {
 	    //	on_syntax(line_count);
@@ -914,14 +945,16 @@ make_command_stream (int (*get_next_byte) (void *),
 		  WordStack.in_word = true;
 	      }
 	    else
-	      on_syntax(line_count);
+	      {
+		// illegal character
+		on_syntax(line_count);
+	      }
 	    break;
 	  }
 	}
       if(exit_loop)	//EOF
 	break;
     } // end of while
-  printf("outside while\n");
 
   while(CmdStack.top!=NULL)
     {
