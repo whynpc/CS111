@@ -55,17 +55,22 @@ main (int argc, char **argv)
   command_t command;
   while ((command = read_command_stream (command_stream)))
     {
+//		printf("@a\n");
       if (print_tree)
 	{
+//	printf("@b\n");
 	  printf ("# %d\n", command_number++);
 	  print_command (command);
+//	printf("@c\n");
 	}
       else
 	{
+//	printf("@d\n");
 	  last_command = command;
 	  execute_command (command, time_travel);
+//	printf("@e\n");
 	}
     }
-
+	
   return print_tree || !last_command ? 0 : command_status (last_command);
 }

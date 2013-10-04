@@ -19,6 +19,7 @@ enum token_type
   	AND, 		//&&
   	OR, 		//||
   	SEMICOLON, 	//; or newline which is equivalent to ;
+	NEWLINE,	// 
   	L_BRA, 		//(
   	R_BRA,		//)
   	TOKEN_EMPTY, 		//used for empty stack

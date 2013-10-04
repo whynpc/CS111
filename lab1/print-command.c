@@ -9,6 +9,9 @@
 static void
 command_indented_print (int indent, command_t c)
 {
+	if (!c) {
+		return;
+	}
   switch (c->type)
     {
     case AND_COMMAND:
@@ -16,21 +19,29 @@ command_indented_print (int indent, command_t c)
     case OR_COMMAND:
     case PIPE_COMMAND:
       {
+	
+	//printf("@x\n");
 	command_indented_print (indent + 2 * (c->u.command[0]->type != c->type),
 				c->u.command[0]);
 	static char const command_label[][3] = { "&&", ";", "||", "|" };
 	printf (" \\\n%*s%s\n", indent, "", command_label[c->type]);
+	if (c->u.command[1]) {
 	command_indented_print (indent + 2 * (c->u.command[1]->type != c->type),
 				c->u.command[1]);
+	}
+	//printf("@u\n");
 	break;
       }
 
     case SIMPLE_COMMAND:
       {
+
 	char **w = c->u.word;
+	//printf("@y\n");
 	printf ("%*s%s", indent, "", *w);
 	while (*++w)
 	  printf (" %s", *w);
+	//printf("@z\n");
 	break;
       }
 
