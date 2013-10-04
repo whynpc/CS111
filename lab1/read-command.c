@@ -500,6 +500,7 @@ on_token(enum token_type token,
 				else
 				{
 					enum token_type old_token = token_pop(&TokenStack);
+					printf("pop token %d\n", old_token);
 					//TODO: CALL exec_token() over old_token
 					if(exec_token(old_token, NULL, NULL))	//old_token should not be I/O redirection
 					{	
@@ -584,7 +585,7 @@ on_simple_cmd(char* cmd)
 
 	int k;
 	for (k = 0; k < wordbuf_cnt; k ++) {
-	//	printf("word #%d: %s\n", k, wordbuf[k]);
+		//	printf("word #%d: %s\n", k, wordbuf[k]);
 	}
 	new_cmd ->u.word = wordbuf;
 	//strcpy(wordbuf, cmd);
@@ -621,6 +622,7 @@ make_command_stream (int (*get_next_byte) (void *),
 	bool exit_loop = false;
 	char c;
 	unsigned int line_count = 0;	//line count
+	bool push_simple_cmd = false;
 
 	while(true)
 	{
@@ -724,12 +726,13 @@ make_command_stream (int (*get_next_byte) (void *),
 
 					if(c=='(' || c==')' || isword(c))
 					{
-						//if(WordStack.len!=0)
-						if (1)
-						{
+						hold_on = true;
+						if (push_simple_cmd) {
+							if (!on_token(NEWLINE, NULL, NULL))
+								on_syntax(line_count);
+							push_simple_cmd = false;
+						} else {
 							int buflen = WordStack.len;
-							hold_on = true;
-							
 							if(!on_simple_cmd(create_buf(&WordStack)))
 								on_syntax(line_count);
 							if (buflen != 0) {
@@ -741,8 +744,6 @@ make_command_stream (int (*get_next_byte) (void *),
 
 							}
 						}
-						else
-							on_syntax(line_count);
 					} else if (c == EOF) {
 						hold_on = true;
 					}
@@ -760,7 +761,7 @@ make_command_stream (int (*get_next_byte) (void *),
 					while(iswhitespace(c=get_next_byte(get_next_byte_argument)))
 					{
 						//DO NOTHING
-						
+
 					}
 
 					if(!isword(c))
@@ -771,8 +772,10 @@ make_command_stream (int (*get_next_byte) (void *),
 						word_push(&input, c);
 						c=get_next_byte(get_next_byte_argument);
 					}while(isword(c));
-					if (c != '\r' && c !='\n')
-						hold_on = true;
+					hold_on = true;
+					if (c == '\r' || c =='\n') {
+						push_simple_cmd = true;
+					}
 					if(!on_simple_cmd(create_buf(&WordStack)))
 						on_syntax(line_count);
 					if(!on_token(INPUT,create_buf(&input),NULL))
@@ -798,8 +801,10 @@ make_command_stream (int (*get_next_byte) (void *),
 						word_push(&output, c);
 						c=get_next_byte(get_next_byte_argument);
 					}while(isword(c));
-					if (c != '\r' && c != '\n')
-						hold_on = true;
+					hold_on = true;
+					if (c == '\r' || c == '\n') {
+						push_simple_cmd = true;
+					}
 					if(!on_simple_cmd(create_buf(&WordStack)))
 						on_syntax(line_count);
 					if(!on_token(OUTPUT, NULL, create_buf(&output)))
