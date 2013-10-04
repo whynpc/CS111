@@ -493,16 +493,16 @@ on_token(enum token_type token,
 						return false;
 				}
 				//create a subshell command
-				command_t cmd = command_pop(&CmdStack);
-				if(cmd==NULL) return false;
-				command_t new_cmd = (command_t)checked_malloc(sizeof(struct command));
-				if(new_cmd==NULL)return false;
+				//command_t cmd = command_pop(&CmdStack);
+				//if(cmd==NULL) return false;
+				//command_t new_cmd = (command_t)checked_malloc(sizeof(struct command));
+				//if(new_cmd==NULL)return false;
 
-				new_cmd->type = SUBSHELL_COMMAND;
-				new_cmd->status = 0;
-				new_cmd->input = NULL; new_cmd->output = NULL;
-				new_cmd->u.subshell_command = cmd;
-				command_push(&CmdStack, new_cmd);
+				//new_cmd->type = SUBSHELL_COMMAND;
+				//new_cmd->status = 0;
+				//new_cmd->input = NULL; new_cmd->output = NULL;
+				//new_cmd->u.subshell_command = cmd;
+				//command_push(&CmdStack, new_cmd);
 				break;
 			}
 
