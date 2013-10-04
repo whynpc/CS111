@@ -480,6 +480,32 @@ on_token(enum token_type token,
 				command_push(&CmdStack, new_cmd);
 				break;
 			}
+		case NEWLINE:
+			{
+				enum token_type old_token = token_pop(&TokenStack);
+				while(old_token != L_BRA && old_token != TOKEN_EMPTY)
+				{
+					//recursively pop operator, execute it, and push the result into CmdStack		
+					//TODO: CALL exec_token() over old_token
+					if(exec_token(old_token, NULL, NULL)) //old_token should not be I/O redirection			
+						old_token = token_pop(&TokenStack);
+					else	//syntax errors
+						return false;
+				}
+				//create a subshell command
+				command_t cmd = command_pop(&CmdStack);
+				if(cmd==NULL) return false;
+				command_t new_cmd = (command_t)checked_malloc(sizeof(struct command));
+				if(new_cmd==NULL)return false;
+
+				new_cmd->type = SUBSHELL_COMMAND;
+				new_cmd->status = 0;
+				new_cmd->input = NULL; new_cmd->output = NULL;
+				new_cmd->u.subshell_command = cmd;
+				command_push(&CmdStack, new_cmd);
+				break;
+			}
+
 		default:
 			{
 				//compare priority, decide whether to push into stack, or pop and execute
@@ -504,7 +530,6 @@ on_token(enum token_type token,
 					//TODO: CALL exec_token() over old_token
 					if(exec_token(old_token, NULL, NULL))	//old_token should not be I/O redirection
 					{	
-						if (token != NEWLINE)
 							token_push(&TokenStack, token);
 
 					}
