@@ -456,7 +456,7 @@ exec_token(enum token_type token,
     default://unknown token
       {return false; break;}
     }
-  printf("finish exe token: %d\n", token);
+  //printf("finish exe token: %d\n", token);
   return true;
 }
 
@@ -598,7 +598,7 @@ on_simple_cmd(char* cmd)
     return true;
 
   }
-  //printf("on simple command: %s\n", cmd);
+  printf("on simple command: %s\n", cmd);
   command_t new_cmd = (command_t)checked_malloc(sizeof(struct command));
   if(new_cmd==NULL) return false;
 
@@ -704,7 +704,7 @@ make_command_stream (int (*get_next_byte) (void *),
     {
       if(hold_on) hold_on=false;	//don't read a new word
       else c = get_next_byte(get_next_byte_argument);
-      //printf("read char %c\n", c);	
+      printf("read char %c\n", c);	
       switch(c)
 	{
 	case '(': 
@@ -864,15 +864,20 @@ make_command_stream (int (*get_next_byte) (void *),
 	    if (c == '\r' || c =='\n' || c == ';') {
 	      push_simple_cmd = true;
 	    }
+
 	    if(!on_simple_cmd(create_buf(&WordStack)))
 	      on_syntax(line_count);
+
 	    if(!on_token(INPUT,create_buf(&input),NULL, line_count, &err_line_num))
 	      on_syntax(err_line_num);		
+
+
 	    break;
 	  }
 	case '>':
 	  {
 	    struct word_stack output;
+
 	    output.top = NULL;
 	    output.len = 0;
 	    output.in_word = false;
@@ -893,10 +898,13 @@ make_command_stream (int (*get_next_byte) (void *),
 	    if (c == '\r' || c == '\n' || c == ';') {
 	      push_simple_cmd = true;
 	    }
+	    printf("a\n");
 	    if(!on_simple_cmd(create_buf(&WordStack)))
 	      on_syntax(line_count);
+	    printf("b\n");
 	    if(!on_token(OUTPUT, NULL, create_buf(&output), line_count, &err_line_num))
 	      on_syntax(err_line_num);		
+	    printf("c\n");
 	    break;
 	  }
 	case EOF:
@@ -943,6 +951,10 @@ make_command_stream (int (*get_next_byte) (void *),
 		word_push(&WordStack, c);
 		if(isword(c))
 		  WordStack.in_word = true;
+	      }
+	    else if (iswhitespace(c))
+	      {
+		// skip white space
 	      }
 	    else
 	      {
