@@ -206,6 +206,7 @@ void command_free(struct command_stack *stack)
 
 void token_push(struct token_stack* stack, enum token_type type, unsigned int line_num)
 {
+  //printf("token push: %d\n", type);
   //create a new node
   struct token_node* node = (struct token_node*)checked_malloc(sizeof(struct token_node));
 
@@ -292,6 +293,11 @@ bool isword(char c)
 bool iswhitespace(char c)
 {
   return c==' '||c=='\t';
+}
+
+bool isnewline(char c)
+{
+  return c == '\r' || c == '\n';
 }
 //Syntax error
 void on_syntax(int line_count)
@@ -405,6 +411,7 @@ exec_token(enum token_type token,
     case SEMICOLON:
       {
 	//what should I do?
+	
 	command_t cmd2 = command_pop(&CmdStack);
 	command_t cmd1 = command_pop(&CmdStack);
 	//SEMICOLON is special: it accepts NULL commands on right side
@@ -428,6 +435,7 @@ exec_token(enum token_type token,
       }
     case SINGLE_SEMICOLON:
       {
+	
 	command_t cmd2 = NULL;
 	command_t cmd1 = command_pop(&CmdStack);
 	if(cmd1==NULL)//no sufficient commands 
@@ -541,13 +549,33 @@ on_token(enum token_type token,
 	      }
 	  } 
 	if (old_token == L_BRA)
-	  token_push(&TokenStack, L_BRA, token_line_num);
+	  token_push(&TokenStack, L_BRA, old_token_line_num);
+
 	break;
       }
 
     default:
       {
 	//compare priority, decide whether to push into stack, or pop and execute
+	//printf("token: %d\n", token);
+	if (token == SEMICOLON || token == SINGLE_SEMICOLON)
+	  {
+	    enum token_type old_token = token_pop(&TokenStack, &old_token_line_num);
+	    while(old_token != L_BRA && old_token != TOKEN_EMPTY)
+	      {
+
+		if(exec_token(old_token, NULL, NULL)) //old_token should not be I/O redirection			
+		  old_token = token_pop(&TokenStack, &old_token_line_num);
+		else	//syntax errors
+		  {
+		    *err_line_num = old_token_line_num;
+		    return false;
+		  }
+	      } 
+	    if (old_token == L_BRA)
+	      token_push(&TokenStack, L_BRA, old_token_line_num);
+	  }
+
 	enum token_priority lhs = GetPriority(token);
 	enum token_priority rhs = GetPriority(token_top(&TokenStack));
 	//printf("token: %d\n", token);
@@ -705,6 +733,16 @@ make_command_stream (int (*get_next_byte) (void *),
       if(hold_on) hold_on=false;	//don't read a new word
       else c = get_next_byte(get_next_byte_argument);
       //printf("read char %c\n", c);	
+
+      if (TokenStack.top != NULL && TokenStack.top->type == SINGLE_SEMICOLON)
+	{
+	  if (!iswhitespace(c) && !isnewline(c) && c != ')' && c != EOF)
+	    {
+	      TokenStack.top->type = SEMICOLON;
+	    }
+	}
+      
+
       switch(c)
 	{
 	case '(': 
@@ -717,10 +755,6 @@ make_command_stream (int (*get_next_byte) (void *),
 	  }
 	case ')':
 	  {
-	    if (WordStack.len == 0 &&TokenStack.top != NULL 
-		&& TokenStack.top->type == SEMICOLON) {
-	      TokenStack.top->type = SINGLE_SEMICOLON;
-	    }
 	    if(!on_simple_cmd(create_buf(&WordStack)))
 	      on_syntax(line_count);
 	    if(!on_token(R_BRA,NULL,NULL, line_count, &err_line_num))
@@ -772,7 +806,7 @@ make_command_stream (int (*get_next_byte) (void *),
 	    }
 	    if(!on_simple_cmd(create_buf(&WordStack)))
 	      on_syntax(line_count);
-	    if(!on_token(SEMICOLON,NULL,NULL, line_count, &err_line_num))
+	    if(!on_token(SINGLE_SEMICOLON,NULL,NULL, line_count, &err_line_num))
 	      on_syntax(err_line_num);
 	    break;
 	  }
@@ -914,12 +948,7 @@ make_command_stream (int (*get_next_byte) (void *),
 		if(!on_simple_cmd(create_buf(&WordStack)))
 		  on_syntax(line_count);
 	      }
-	    //TODO: recursively pop token and exec it
-	    if (WordStack.len == 0 && TokenStack.top != NULL 
-		&& TokenStack.top->type == SEMICOLON) {
-	      TokenStack.top->type = SINGLE_SEMICOLON;
-	    }
-	    
+	  	    
 	    unsigned int old_token_line_num = 1;
 	    enum token_type old_token = token_pop(&TokenStack, &old_token_line_num);
 	    while(old_token != TOKEN_EMPTY)
