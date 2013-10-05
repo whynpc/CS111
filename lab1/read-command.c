@@ -410,7 +410,7 @@ exec_token(enum token_type token,
 	//SEMICOLON is special: it accepts NULL commands on right side
 	if(cmd1==NULL)//no sufficient commands 
 	  {
-	    printf("no left child for semicolon\n");
+	    //printf("no left child for semicolon\n");
 	    return false;
 	  }					
 
@@ -432,7 +432,7 @@ exec_token(enum token_type token,
 	command_t cmd1 = command_pop(&CmdStack);
 	if(cmd1==NULL)//no sufficient commands 
 	  {
-	    printf("no left child for semicolon\n");
+	    //printf("no left child for semicolon\n");
 	    return false;
 	  }					
 
@@ -598,7 +598,7 @@ on_simple_cmd(char* cmd)
     return true;
 
   }
-  printf("on simple command: %s\n", cmd);
+  //printf("on simple command: %s\n", cmd);
   command_t new_cmd = (command_t)checked_malloc(sizeof(struct command));
   if(new_cmd==NULL) return false;
 
@@ -704,7 +704,7 @@ make_command_stream (int (*get_next_byte) (void *),
     {
       if(hold_on) hold_on=false;	//don't read a new word
       else c = get_next_byte(get_next_byte_argument);
-      printf("read char %c\n", c);	
+      //printf("read char %c\n", c);	
       switch(c)
 	{
 	case '(': 
@@ -898,13 +898,13 @@ make_command_stream (int (*get_next_byte) (void *),
 	    if (c == '\r' || c == '\n' || c == ';') {
 	      push_simple_cmd = true;
 	    }
-	    printf("a\n");
+	    
 	    if(!on_simple_cmd(create_buf(&WordStack)))
 	      on_syntax(line_count);
-	    printf("b\n");
+	    
 	    if(!on_token(OUTPUT, NULL, create_buf(&output), line_count, &err_line_num))
 	      on_syntax(err_line_num);		
-	    printf("c\n");
+	    
 	    break;
 	  }
 	case EOF:
