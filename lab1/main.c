@@ -7,6 +7,11 @@
 
 #include "command.h"
 
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+
 static char const *program_name;
 static char const *script_name;
 
@@ -71,6 +76,9 @@ main (int argc, char **argv)
 //	printf("@e\n");
 	}
     }
+
+  int status;
+  waitpid(-1, &status, 0); 
 	
   return print_tree || !last_command ? 0 : command_status (last_command);
 }
