@@ -115,6 +115,8 @@ make_file_usage_list()
 {
   file_usage_list_t l;
   l = (file_usage_list_t) malloc(sizeof(struct file_usage_list));
+  l->head = NULL;
+  l->tail = NULL;
   return l;
 }
 
@@ -287,7 +289,6 @@ check_single_file_dependency(char *file_name, file_usage_list_t l)
   /*  file aleady taken as the dependency of current command */
   if (retrieve_file_usage(l, file_name))
     return;
-
   file_usage_t fu = retrieve_file_usage(file_usage_stat_all, file_name);
   if (fu)
     {
@@ -298,7 +299,7 @@ check_single_file_dependency(char *file_name, file_usage_list_t l)
       /* if a file not used by previous commands,
          we still save it into dependency list with pid=0, 
          indicating current command first use the file*/
-      add_file_usage(l, fu->file_name, 0);
+      add_file_usage(l, file_name, 0);
     }
 }
 
