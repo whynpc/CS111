@@ -47,7 +47,7 @@ retrieve_file_usage(file_usage_list_t l, char *file_name)
   file_usage_t p = l->head;
   while (p)
     {
-      if (strcmp(p->file_name, file_name))
+      if (strcmp(p->file_name, file_name)==0)
 	{
 	  return p;
 	}
@@ -354,12 +354,12 @@ execute_command_timetravel(command_t c)
       return 0;
     }
 
-  
+  //file_dependency lists all files that this command depends on, together with corresponding processes  
   file_usage_list_t file_dependency = make_file_usage_list();
   check_command_file_dependency(c, file_dependency);
   
   pid_t pid;
-  while ((pid = fork()) < 0);
+  while ((pid = fork()) < 0);	//wait until we can create a process
   if (pid == 0)
     {
       file_usage_t f = file_dependency->head;
@@ -367,25 +367,27 @@ execute_command_timetravel(command_t c)
 	{
 	  if (f->pid != 0)
 	    {
+	      printf("Waiting for %d\n",pid);
 	      int status  = 0;
-	      waitpid(pid, &status, 0);
+	      waitpid(pid, &status, 0);	//blocked mode, wait until this process exits
 	    }
-	  f = f->next;
+	  f = f->next;	//goto next
 	}
       execute_command_standard(c);
       _exit(command_status(c));
     }
   else if (pid > 0)
     {
+      printf("pid=%d ", pid);
+      print_command(c);
       file_usage_t f = file_dependency->head;
       while (f)
 	{
-	  if (1)
-	    {
-	      try_add_file_usage(file_usage_stat_all, f->file_name, pid);
-	    }
+	  try_add_file_usage(file_usage_stat_all, f->file_name, pid);
 	  f = f->next;
 	}
+      //int status;
+      //waitpid(pid,&status,0);
     }
   return 0;
 }
