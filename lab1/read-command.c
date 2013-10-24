@@ -898,6 +898,9 @@ make_command_stream (int (*get_next_byte) (void *),
 	    if (c == '\r' || c =='\n' || c == ';') {
 	      push_simple_cmd = true;
 	    }
+	    while (iswhitespace(c)) {
+	      c=get_next_byte(get_next_byte_argument);
+	    }
 
 	    if(!on_simple_cmd(create_buf(&WordStack)))
 	      on_syntax(line_count);
@@ -928,6 +931,10 @@ make_command_stream (int (*get_next_byte) (void *),
 	      word_push(&output, c);
 	      c=get_next_byte(get_next_byte_argument);
 	    }while(isword(c));
+	    while (iswhitespace(c)) {
+	      c = get_next_byte(get_next_byte_argument);
+	    }
+	    
 	    hold_on = true;
 	    if (c == '\r' || c == '\n' || c == ';') {
 	      push_simple_cmd = true;
