@@ -184,7 +184,8 @@ execute_command_standard(command_t c)
      */
     int pipefd[2];
     pipe(pipefd);
-    pid_t pid = fork();
+    pid_t pid;
+    while ((pid = fork()) < 0);
     if(pid<0)return -1;
     if(pid==0){	//child: execute a in a|b. Only write data
       close(pipefd[0]);	//close read end
@@ -209,7 +210,7 @@ execute_command_standard(command_t c)
   case SIMPLE_COMMAND:{
     //create a new process
     pid_t pid;
-    pid = fork();
+    while ((pid = fork()) < 0);
     if(pid<0)
       {
 	return -1;
@@ -328,7 +329,8 @@ execute_command_timetravel(command_t c)
   file_usage_list_t file_dependency = make_file_usage_list();
   check_command_file_dependency(c, file_dependency);
   
-  pid_t pid = fork();
+  pid_t pid;
+  while ((pid = fork()) < 0);
   if (pid == 0)
     {
       file_usage_t f = file_dependency->head;
