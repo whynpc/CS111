@@ -18,6 +18,8 @@
    static function definitions, etc.  */
 #include <string.h>
 
+/* the node of the link list used to record
+   which command use which file */
 struct file_usage {
   char *file_name;
   pid_t pid;
@@ -25,14 +27,17 @@ struct file_usage {
 };
 typedef struct file_usage* file_usage_t;
 
+/* define a linked-list, we also have the tail pointer for convenience */
 struct file_usage_list {
   file_usage_t head;
   file_usage_t tail;
 };
 typedef struct file_usage_list* file_usage_list_t;
 
+/* global records of the file usage by whole command stream */
 file_usage_list_t file_usage_stat_all;
 
+/* find whether a file has been used by a command in a file usage list */
 static file_usage_t
 retrieve_file_usage(file_usage_list_t l, char *file_name) 
 {
@@ -88,7 +93,8 @@ add_file_usage(file_usage_list_t l, char *file_name, pid_t pid)
     }
 }
 
-/* you always want to use this function to add file usage */
+/* you may want to use this function to add file usage; 
+   selectively call update_file_usage() or add_file_usage() */
 static void
 try_add_file_usage(file_usage_list_t l, char *file_name, pid_t pid)
 {
@@ -103,6 +109,7 @@ try_add_file_usage(file_usage_list_t l, char *file_name, pid_t pid)
     }
 }
 
+/* create a new file usage list */
 static file_usage_list_t
 make_file_usage_list()
 {
@@ -266,6 +273,11 @@ execute_command_standard(command_t c)
 }
 
 
+/* check whehter a specified file has been used in the global
+   file usage record; if so, take the prior command who
+   uses this file as the dependency of current command;
+   if not, still create a entry in the dependency to indicate
+   the current command first use the file */
 static void
 check_single_file_dependency(char *file_name, file_usage_list_t l)
 {
@@ -291,7 +303,7 @@ check_single_file_dependency(char *file_name, file_usage_list_t l)
 }
 
 /* check the command depends on which commands;
-   save results in l */
+   save results in l, which is a local record only for this command */
 static void
 check_command_file_dependency(command_t c, file_usage_list_t l)
 {
@@ -302,7 +314,7 @@ check_command_file_dependency(command_t c, file_usage_list_t l)
     {
     case AND_COMMAND:
     case OR_COMMAND:
-    case SEQUENCE_COMMAND:
+    case SEQUENCE_COMMAND:  // hopefully, there will be no sequence command here
     case PIPE_COMMAND:
       check_command_file_dependency(c->u.command[0], l);
       check_command_file_dependency(c->u.command[1], l);
@@ -323,15 +335,25 @@ check_command_file_dependency(command_t c, file_usage_list_t l)
 int
 execute_command_timetravel(command_t c)
 {
-  /* init file usage status if needed*/
+  /* init global file usage records if needed */
   if (file_usage_stat_all == NULL)
     {
       file_usage_stat_all = make_file_usage_list();
     }
-  //junk code to avoid warnings
-  if (c == NULL)
-    return -1;
 
+  // treat a sequence command as two separate command
+  // there is a chance of paralism between the two subcommands
+  if (c->type == SEQUENCE_COMMAND) 
+    {
+      execute_command_timetravel(c->u.command[0]);
+      execute_command_timetravel(c->u.command[1]);
+      /* at this stage, two subcommands already be sent
+         to execute_command_standard(), we simply go for
+         the next command */
+      return 0;
+    }
+
+  
   file_usage_list_t file_dependency = make_file_usage_list();
   check_command_file_dependency(c, file_dependency);
   
