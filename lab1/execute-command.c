@@ -201,7 +201,7 @@ execute_command_standard(command_t c)
       dup2(pipefd[1],STDOUT_FILENO);	//redirect stdout to pipe
       if(execute_command_standard(c->u.command[0])==-1)
 	_exit(-1);
-      _exit(0);
+      _exit(command_status(c->u.command[0]));
     }
     else{	//parent: execute b in a|b. Only read data
       close(pipefd[1]);	//close write end
@@ -350,6 +350,7 @@ execute_command_timetravel(command_t c)
 	  f = f->next;
 	}
       execute_command_standard(c);
+      _exit(command_status(c));
     }
   else if (pid > 0)
     {
