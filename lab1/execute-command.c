@@ -151,29 +151,38 @@ int
 execute_command_standard(command_t c)
 {
   if(c==NULL)
-    return -1;
+    return 0;
   switch(c->type){
   case AND_COMMAND:{
-    if(execute_command_standard(c->u.command[0])!=0)
-      return -1;
-    if(execute_command_standard(c->u.command[1])!=0)
-      return -1;
-    return 0;
+    execute_command_standard(c->u.command[0]);
+    if (command_status(c->u.command[0]) == 0)
+      {
+	execute_command_standard(c->u.command[1]);
+	c->status = command_status(c->u.command[1]);
+      }
+    else
+      {
+	c->status = command_status(c->u.command[0]);
+      }
     break;
   }
   case SEQUENCE_COMMAND:{
-    if(execute_command_standard(c->u.command[0])!=0)
-      return -1;
-    if(execute_command_standard(c->u.command[1])!=0)
-      return -1;
-    return 0;
+    execute_command_standard(c->u.command[0]);
+    execute_command_standard(c->u.command[1]);
+    c->status = command_status(c->u.command[1]);
     break;
   }
   case OR_COMMAND:{
-    int res1 = execute_command_standard(c->u.command[0]);
-    int res2 = execute_command_standard(c->u.command[1]);
-    if(res1==0 || res2==0)return 0;
-    else return -1;
+    execute_command_standard(c->u.command[0]);
+    if (command_status(c->u.command[0]) != 0)
+      {
+	execute_command_standard(c->u.command[1]);
+	c->status = command_status(c->u.command[1]);
+      }
+    else
+      {
+	c->status = 0;
+      }
     break;
   }
   case PIPE_COMMAND:{
@@ -186,7 +195,7 @@ execute_command_standard(command_t c)
     pipe(pipefd);
     pid_t pid;
     while ((pid = fork()) < 0);
-    if(pid<0)return -1;
+
     if(pid==0){	//child: execute a in a|b. Only write data
       close(pipefd[0]);	//close read end
       dup2(pipefd[1],STDOUT_FILENO);	//redirect stdout to pipe
@@ -199,11 +208,12 @@ execute_command_standard(command_t c)
       dup2(pipefd[0],STDIN_FILENO);	//redirect stdin to pipe
       int status;
       waitpid(pid,&status,0);
-      if(WEXITSTATUS(status)==-1)return -1;
+      if(WEXITSTATUS(status)==-1)
+	return -1;
 
       if(execute_command_standard(c->u.command[1])==-1)
 	return -1;
-      return 0;
+      c->status = command_status(c->u.command[1]);
     }
     break;
   }
@@ -211,10 +221,6 @@ execute_command_standard(command_t c)
     //create a new process
     pid_t pid;
     while ((pid = fork()) < 0);
-    if(pid<0)
-      {
-	return -1;
-      }
 	
     if(pid==0){		//wait for pid
       //I/O redirection
@@ -243,15 +249,15 @@ execute_command_standard(command_t c)
       {
 	int status;
 	waitpid(pid,&status,0);
-
-	return WEXITSTATUS(status);
+	c->status = WEXITSTATUS(status);
       }
     break;
   }
   case SUBSHELL_COMMAND:{
     redirect_input(c->input);
     redirect_output(c->output);
-    return execute_command_standard(c->u.subshell_command);
+    execute_command_standard(c->u.subshell_command);
+    c->status = command_status(c->u.subshell_command);
     break;	
   }
   }
