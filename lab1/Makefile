@@ -1,8 +1,8 @@
 # CS 111 Lab 1 Makefile
 
 CC = gcc
-#CFLAGS = -g -Wall -Wextra -Werror #warnings will be treated as errors
-CFLAGS = -g -Wall -Wextra #for debug
+CFLAGS = -g -Wall -Wextra -Werror #warnings will be treated as errors
+#CFLAGS = -g -Wall -Wextra #for debug
 LAB = 1
 DISTDIR = lab1-$(USER)
 CHECK_DIST = ./check-dist

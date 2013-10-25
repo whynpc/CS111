@@ -357,7 +357,7 @@ execute_command_timetravel(command_t c)
   //file_dependency lists all files that this command depends on, together with corresponding processes  
   file_usage_list_t file_dependency = make_file_usage_list();
   check_command_file_dependency(c, file_dependency);
-  
+
   pid_t pid;
   while ((pid = fork()) < 0);	//wait until we can create a process
   if (pid == 0)
@@ -368,18 +368,20 @@ execute_command_timetravel(command_t c)
 	  if (f->pid != 0)
 	    {
 	      printf("Waiting for %d\n",f->pid);
-	      int status  = 0;
-	      waitpid(f->pid, &status, 0);	//blocked mode, wait until this process exits
+	      int status;
+	      waitpid(f->pid, &status, 0);	//child cannot wait for another child, so waitpid does not wait
 	    }
 	  f = f->next;	//goto next
 	}
+      printf("Executing ");
+      print_command(c);
       execute_command_standard(c);
       _exit(command_status(c));
     }
   else if (pid > 0)
     {
-      //printf("pid=%d ", pid);
-      //print_command(c);
+      printf("pid=%d ", pid);
+      print_command(c);
       file_usage_t f = file_dependency->head;
       while (f)
 	{
