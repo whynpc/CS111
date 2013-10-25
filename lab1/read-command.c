@@ -727,6 +727,7 @@ make_command_stream (int (*get_next_byte) (void *),
   unsigned int err_line_num = 0;
   char prev_newline_char = '\0';
   bool push_simple_cmd = false;
+  bool push_subshell = false;
 
   while(true)
     {
@@ -741,7 +742,10 @@ make_command_stream (int (*get_next_byte) (void *),
 	      TokenStack.top->type = SEMICOLON;
 	    }
 	}
-      
+      if (!iswhitespace(c) && c != ';'  && push_subshell)
+	{
+	  push_subshell = false;
+	}
 
       switch(c)
 	{
@@ -759,6 +763,7 @@ make_command_stream (int (*get_next_byte) (void *),
 	      on_syntax(line_count);
 	    if(!on_token(R_BRA,NULL,NULL, line_count, &err_line_num))
 	      on_syntax(err_line_num);
+	    push_subshell = true;
 	    break;
 	  }
 	case '&':
@@ -797,9 +802,14 @@ make_command_stream (int (*get_next_byte) (void *),
 	  {
 	    //a simple command should appear before ';'
 	    if(WordStack.len==0) {
-	      if (push_simple_cmd) {
+	      if (push_simple_cmd) 
+		{
 		push_simple_cmd = false;
-	      } else {
+		} 
+	      else if (push_subshell) 
+		{
+		push_subshell = false;}
+	      else {
 		on_syntax(line_count);
 	      }
 
