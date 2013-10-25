@@ -461,15 +461,15 @@ execute_command_timetravel(command_t c)
 	    }
 	  f = f->next;	//goto next
 	}
-      printf("Executing ");
-      print_command(c);
+      //printf("Executing ");
+      //print_command(c);
       execute_command_standard(c);
       _exit(command_status(c));
     }
   else if (pid > 0)
     {
-      printf("pid=%d ", pid);
-      print_command(c);
+      //printf("pid=%d ", pid);
+      //print_command(c);
       file_usage_t f = file_dependency->head;
 
       while (f)
