@@ -76,8 +76,8 @@ main (int argc, char **argv)
 //	printf("@e\n");
 	}
     }
-
-  wait_all_threads();
+  if(time_travel)
+  	wait_all_threads();
 
   int status;
   while(waitpid(-1, &status, 0))	//wait until all children exit
