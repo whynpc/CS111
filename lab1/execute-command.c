@@ -13,10 +13,58 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 
+#include <pthread.h>
+#include <sys/time.h>
+
 
 /* FIXME: You may need to add #include directives, macro definitions,
    static function definitions, etc.  */
 #include <string.h>
+
+struct thread_node{
+	pthread_t thread;
+	struct thread_node *next;
+};
+
+typedef struct thread_node* thread_node_t;
+
+struct thread_list{
+	thread_node_t head;
+	thread_node_t tail;
+	pthread_mutex_t lock;
+};
+typedef struct thread_list* thread_list_t;
+
+thread_list_t wait_thread;
+
+void add_thread(pthread_t thread)
+{
+   pthread_mutex_lock(&(wait_thread->lock));
+   thread_node_t node = (thread_node_t)malloc(sizeof(struct thread_node));
+   node->thread = thread;
+   node->next = NULL;
+
+   if(wait_thread->head==NULL)
+      wait_thread->head = node;
+
+   if(wait_thread->tail!=NULL)
+      wait_thread->tail->next = node;
+      
+   wait_thread->tail = node;
+   pthread_mutex_unlock(&(wait_thread->lock));
+}
+
+void wait_all_threads()
+{
+   if(wait_thread->head==NULL)return;
+   while(wait_thread->head)
+   {
+	pthread_join(wait_thread->head->thread,NULL);
+	thread_node_t p = wait_thread->head;
+	wait_thread->head = wait_thread->head->next;
+	free(p);	
+   }
+}
 
 /* the node of the link list used to record
    which command use which file */
@@ -31,6 +79,8 @@ typedef struct file_usage* file_usage_t;
 struct file_usage_list {
   file_usage_t head;
   file_usage_t tail;
+  command_t command;
+  pthread_mutex_t lock;	
 };
 typedef struct file_usage_list* file_usage_list_t;
 
@@ -44,15 +94,18 @@ retrieve_file_usage(file_usage_list_t l, char *file_name)
   if (file_name == NULL)
     return NULL;
 
+  pthread_mutex_lock(&(l->lock));
   file_usage_t p = l->head;
   while (p)
     {
       if (strcmp(p->file_name, file_name)==0)
 	{
+          pthread_mutex_unlock(&(l->lock));
 	  return p;
 	}
       p = p->next;
     }
+  pthread_mutex_unlock(&(l->lock));
   return p;
 }
 
@@ -80,7 +133,8 @@ add_file_usage(file_usage_list_t l, char *file_name, pid_t pid)
   strcpy(new_node->file_name, file_name);
   new_node->pid = pid;
   new_node->next = NULL;
-
+  
+  pthread_mutex_lock(&(l->lock));
   if (l->head && l->tail)
     {
       l->tail->next = new_node;
@@ -91,13 +145,15 @@ add_file_usage(file_usage_list_t l, char *file_name, pid_t pid)
       l->head = new_node;
       l->tail = new_node;
     }
+  pthread_mutex_unlock(&(l->lock));
 }
 
 /* you may want to use this function to add file usage; 
    selectively call update_file_usage() or add_file_usage() */
 static void
 try_add_file_usage(file_usage_list_t l, char *file_name, pid_t pid)
-{
+{ 
+  //Yuanjie: no need for lock/unlock, which would be done by retrieve_file_usage() or add_file_usage()
   file_usage_t p = retrieve_file_usage(l, file_name);
   if (p)
     {
@@ -117,6 +173,8 @@ make_file_usage_list()
   l = (file_usage_list_t) malloc(sizeof(struct file_usage_list));
   l->head = NULL;
   l->tail = NULL;
+  pthread_mutex_init(&(l->lock),NULL);
+
   return l;
 }
 
@@ -332,6 +390,52 @@ check_command_file_dependency(command_t c, file_usage_list_t l)
     }
 }
 
+//used for thread that executes commands
+void*
+execute_command_thread(void* p)
+{
+  file_usage_list_t file_dependency = (file_usage_list_t)p;
+  command_t c = file_dependency->command;
+
+  //wait until all dependent commands end
+  file_usage_t f = file_dependency->head;
+  while (f)
+  {
+     if (f->pid != 0) 
+     {
+       printf("Waiting for %d\n",f->pid);
+       int status;
+       waitpid(f->pid, &status, 0);	//child cannot wait for another child, so waitpid does not wait
+     }
+     f = f->next;	//goto next
+  }
+
+  pid_t pid;
+  while ((pid = fork()) < 0);	//wait until we can create a process
+
+  if(pid==0)	//child
+  {
+     printf("Executing ");
+     print_command(c);
+     execute_command_standard(c);
+      _exit(command_status(c));
+  }
+  else if(pid>0)	//parent
+  {
+      printf("pid=%d ", pid);
+      print_command(c);
+      f = file_dependency->head;
+      while (f)
+	{
+	  try_add_file_usage(file_usage_stat_all, f->file_name, pid);
+	  f = f->next;
+	}
+     int status;
+     waitpid(pid,&status,0);  
+  }
+  pthread_exit(NULL);	
+}
+
 /*lab 1c: parallel execution*/
 int
 execute_command_timetravel(command_t c)
@@ -340,6 +444,13 @@ execute_command_timetravel(command_t c)
   if (file_usage_stat_all == NULL)
     {
       file_usage_stat_all = make_file_usage_list();
+    }
+  if (wait_thread == NULL)
+    {
+         wait_thread = (thread_list_t) malloc(sizeof(struct file_usage_list));
+ 	 wait_thread->head = NULL;
+         wait_thread->tail = NULL;
+	 pthread_mutex_init(&(wait_thread->lock),NULL);
     }
 
   // treat a sequence command as two separate command
@@ -357,40 +468,11 @@ execute_command_timetravel(command_t c)
   //file_dependency lists all files that this command depends on, together with corresponding processes  
   file_usage_list_t file_dependency = make_file_usage_list();
   check_command_file_dependency(c, file_dependency);
+  file_dependency->command = c;
 
-  pid_t pid;
-  while ((pid = fork()) < 0);	//wait until we can create a process
-  if (pid == 0)
-    {
-      file_usage_t f = file_dependency->head;
-      while (f)
-	{
-	  if (f->pid != 0)
-	    {
-	      printf("Waiting for %d\n",f->pid);
-	      int status;
-	      waitpid(f->pid, &status, 0);	//child cannot wait for another child, so waitpid does not wait
-	    }
-	  f = f->next;	//goto next
-	}
-      printf("Executing ");
-      print_command(c);
-      execute_command_standard(c);
-      _exit(command_status(c));
-    }
-  else if (pid > 0)
-    {
-      printf("pid=%d ", pid);
-      print_command(c);
-      file_usage_t f = file_dependency->head;
-      while (f)
-	{
-	  try_add_file_usage(file_usage_stat_all, f->file_name, pid);
-	  f = f->next;
-	}
-      //int status;
-      //waitpid(pid,&status,0);
-    }
+  pthread_t thread;
+  while(pthread_create(&thread,NULL,execute_command_thread,(void*)file_dependency)!=0);	//wait until we can create a thread
+  add_thread(thread);
   return 0;
 }
 

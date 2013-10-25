@@ -77,6 +77,8 @@ main (int argc, char **argv)
 	}
     }
 
+  wait_all_threads();
+
   int status;
   while(waitpid(-1, &status, 0))	//wait until all children exit
   {
