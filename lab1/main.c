@@ -76,8 +76,6 @@ main (int argc, char **argv)
 //	printf("@e\n");
 	}
     }
-  if(time_travel)
-  	wait_all_threads();
 
   int status;
   while(waitpid(-1, &status, 0))	//wait until all children exit
@@ -85,7 +83,6 @@ main (int argc, char **argv)
 	if(errno==ECHILD)
           break;
   }
-  //waitpid(-1, &status, 0); 
 	
   return print_tree || !last_command ? 0 : command_status (last_command);
 }
