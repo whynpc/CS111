@@ -124,7 +124,7 @@ retrieve_file_usage(file_usage_list_t l, char *file_name)
 static void
 update_file_usage(file_usage_t fu, pid_t pid, enum file_open_mode mode)
 {
-  if (fu && pid > 0)
+  if (fu)
     {
       pid_node_t node = (pid_node_t) malloc(sizeof(struct pid_node));
       node->pid = pid;
@@ -165,14 +165,14 @@ add_file_usage(file_usage_list_t l, pid_t pid, char *file_name, enum file_open_m
 static void
 try_add_file_usage(file_usage_list_t l, pid_t pid, char *file_name, enum file_open_mode mode)
 {
-  file_usage_t fu = retrieve_file_usage(l, file_name);
-  if (fu)
+   file_usage_t fu = retrieve_file_usage(l, file_name);
+   if (fu)
     {
-      update_file_usage(fu, pid, mode);
+       update_file_usage(fu, pid, mode);
     }
   else
     {
-      add_file_usage(l, pid, file_name, mode);
+       add_file_usage(l, pid, file_name, mode);
     }
 }
 
@@ -353,23 +353,26 @@ check_single_file_dependency(char *file_name, enum file_open_mode mode, file_usa
   /* no iio redirection */
   if (file_name == NULL)
     return;
+  
   /*  file aleady taken as the dependency of current command */
   if (retrieve_file_usage(l, file_name))
     return;
+  
   file_usage_t fu = retrieve_file_usage(file_usage_stat_all, file_name);
-
+  
   pid_node_t pn = NULL;
-  if (mode == READ)
-    {
-      pn = find_last_pid_by_mode(fu->pids, WRITE);
-    }
-  else 
-    {
-      pn = fu->pids->tail;
-    }
   
   if (fu)
     {
+      if (mode == READ)
+	{
+	  pn = find_last_pid_by_mode(fu->pids, WRITE);
+	}
+      else 
+	{
+	  pn = fu->pids->tail;
+	}
+  
       if (pn)
 	add_file_usage(l, pn->pid, file_name, mode);
       else
@@ -382,6 +385,7 @@ check_single_file_dependency(char *file_name, enum file_open_mode mode, file_usa
          indicating current command first use the file*/
       add_file_usage(l, 0, file_name, mode);
     }
+  
 }
 
 /* check the command depends on which commands;
@@ -391,7 +395,7 @@ check_command_file_dependency(command_t c, file_usage_list_t l)
 {
   if (c == NULL)
     return;
-
+  
   switch (c->type)
     {
     case AND_COMMAND:
@@ -411,6 +415,7 @@ check_command_file_dependency(command_t c, file_usage_list_t l)
       check_single_file_dependency(c->output, WRITE, l);
       break;
     }
+  
 }
 
 /*lab 1c: parallel execution*/
@@ -466,6 +471,7 @@ execute_command_timetravel(command_t c)
       printf("pid=%d ", pid);
       print_command(c);
       file_usage_t f = file_dependency->head;
+
       while (f)
 	{
 	  try_add_file_usage(file_usage_stat_all, pid, f->file_name, f->pids->head->mode);
