@@ -415,14 +415,14 @@ execute_command_thread(void* p)
 
   if(pid==0)	//child
   {
-     printf("Executing ");
-     print_command(c);
+     //printf("Executing ");
+     //print_command(c);
      execute_command_standard(c);
       _exit(command_status(c));
   }
   else if(pid>0)	//parent
   {
-      printf("pid=%d ", pid);
+      printf("Executing pid=%d ", pid);
       print_command(c);
       f = file_dependency->head;
       while (f)
@@ -470,9 +470,10 @@ execute_command_timetravel(command_t c)
   check_command_file_dependency(c, file_dependency);
   file_dependency->command = c;
 
-  pthread_t thread;
-  while(pthread_create(&thread,NULL,execute_command_thread,(void*)file_dependency)!=0);	//wait until we can create a thread
-  add_thread(thread);
+  pthread_t* thread=(pthread_t*)malloc(sizeof(pthread_t));
+  while(pthread_create(thread,NULL,execute_command_thread,(void*)file_dependency)!=0);	//wait until we can create a thread
+  
+  add_thread(*thread);
   return 0;
 }
 
