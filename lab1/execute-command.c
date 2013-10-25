@@ -18,11 +18,32 @@
    static function definitions, etc.  */
 #include <string.h>
 
+enum file_open_mode
+  {
+    READ = 0,
+    WRITE,
+  };
+
+
+struct pid_node {
+  pid_t pid;
+  enum file_open_mode mode;
+  struct pid_node *prev;
+  struct pid_node *next; 
+};
+typedef struct pid_node* pid_node_t;
+
+struct pid_list {
+  pid_node_t head;
+  pid_node_t tail;
+};
+typedef struct pid_list* pid_list_t; 
+
 /* the node of the link list used to record
    which command use which file */
 struct file_usage {
   char *file_name;
-  pid_t pid;
+  pid_list_t pids;
   struct file_usage *next;
 };
 typedef struct file_usage* file_usage_t;
@@ -36,6 +57,48 @@ typedef struct file_usage_list* file_usage_list_t;
 
 /* global records of the file usage by whole command stream */
 file_usage_list_t file_usage_stat_all;
+
+static pid_list_t
+make_pid_list()
+{
+  pid_list_t l = (pid_list_t) malloc(sizeof(struct pid_list));
+  l->head = NULL;
+  l->tail = NULL;
+  return l;
+}
+
+static void
+add_to_pid_list(pid_list_t l, pid_node_t n)
+{
+  if (l->head && l->tail)
+    {
+      l->tail->next = n;
+      n->prev = l->tail;
+      l->tail = n;
+    }
+  else 
+    {
+      l->head = n;
+      l->tail = n;
+    }
+}
+
+static pid_node_t 
+find_last_pid_by_mode(pid_list_t l, enum file_open_mode mode)
+{
+  pid_node_t p = l->tail;
+  while (p && p->mode != mode) 
+    {
+      if (p->prev)
+	p = p->prev;
+      else
+	break;
+    }
+  if (p->mode == mode)
+    return p;
+  else
+    return NULL;
+}
 
 /* find whether a file has been used by a command in a file usage list */
 static file_usage_t
@@ -59,27 +122,31 @@ retrieve_file_usage(file_usage_list_t l, char *file_name)
 
 /* Called when there is a new command depending on a file used by previous commands */
 static void
-update_file_usage(file_usage_t p, pid_t pid)
+update_file_usage(file_usage_t fu, pid_t pid, enum file_open_mode mode)
 {
-  if (p && pid > 0)
+  if (fu && pid > 0)
     {
-      /* we only record the latest process of executing command 
-	 depending on the file; later commands depending on the
-	 same file have to wait for the latest command */
-      p->pid = pid;
+      pid_node_t node = (pid_node_t) malloc(sizeof(struct pid_node));
+      node->pid = pid;
+      node->mode = mode;
+      node->prev = NULL;
+      node->next = NULL;
+      add_to_pid_list(fu->pids, node);
     }
 }
 
 /* Called only if the file never used by previous command; 
    if the file already used by previous command, call update_file_usage() */
 static void
-add_file_usage(file_usage_list_t l, char *file_name, pid_t pid)
+add_file_usage(file_usage_list_t l, pid_t pid, char *file_name, enum file_open_mode mode)
 {
   file_usage_t new_node = (file_usage_t) malloc(sizeof(struct file_usage));
   new_node->file_name = (char *) malloc(strlen(file_name) + 1);
   strcpy(new_node->file_name, file_name);
-  new_node->pid = pid;
+  new_node->pids = make_pid_list();
   new_node->next = NULL;
+
+  update_file_usage(new_node, pid, mode);
 
   if (l->head && l->tail)
     {
@@ -96,16 +163,16 @@ add_file_usage(file_usage_list_t l, char *file_name, pid_t pid)
 /* you may want to use this function to add file usage; 
    selectively call update_file_usage() or add_file_usage() */
 static void
-try_add_file_usage(file_usage_list_t l, char *file_name, pid_t pid)
+try_add_file_usage(file_usage_list_t l, pid_t pid, char *file_name, enum file_open_mode mode)
 {
-  file_usage_t p = retrieve_file_usage(l, file_name);
-  if (p)
+  file_usage_t fu = retrieve_file_usage(l, file_name);
+  if (fu)
     {
-      update_file_usage(p, pid);
+      update_file_usage(fu, pid, mode);
     }
   else
     {
-      add_file_usage(l, file_name, pid);
+      add_file_usage(l, pid, file_name, mode);
     }
 }
 
@@ -281,7 +348,7 @@ execute_command_standard(command_t c)
    if not, still create a entry in the dependency to indicate
    the current command first use the file */
 static void
-check_single_file_dependency(char *file_name, file_usage_list_t l)
+check_single_file_dependency(char *file_name, enum file_open_mode mode, file_usage_list_t l)
 {
   /* no iio redirection */
   if (file_name == NULL)
@@ -290,16 +357,30 @@ check_single_file_dependency(char *file_name, file_usage_list_t l)
   if (retrieve_file_usage(l, file_name))
     return;
   file_usage_t fu = retrieve_file_usage(file_usage_stat_all, file_name);
+
+  pid_node_t pn = NULL;
+  if (mode == READ)
+    {
+      pn = find_last_pid_by_mode(fu->pids, WRITE);
+    }
+  else 
+    {
+      pn = fu->pids->tail;
+    }
+  
   if (fu)
     {
-      add_file_usage(l, fu->file_name, fu->pid);
+      if (pn)
+	add_file_usage(l, pn->pid, file_name, mode);
+      else
+	add_file_usage(l, 0, file_name, mode);
     }
   else
     {
       /* if a file not used by previous commands,
          we still save it into dependency list with pid=0, 
          indicating current command first use the file*/
-      add_file_usage(l, file_name, 0);
+      add_file_usage(l, 0, file_name, mode);
     }
 }
 
@@ -321,13 +402,13 @@ check_command_file_dependency(command_t c, file_usage_list_t l)
       check_command_file_dependency(c->u.command[1], l);
       break;
     case SIMPLE_COMMAND:
-      check_single_file_dependency(c->input, l);
-      check_single_file_dependency(c->output, l);
+      check_single_file_dependency(c->input, READ, l);
+      check_single_file_dependency(c->output, WRITE, l);
       break;
     case SUBSHELL_COMMAND:
       check_command_file_dependency(c->u.subshell_command, l);
-      check_single_file_dependency(c->input, l);
-      check_single_file_dependency(c->output, l);
+      check_single_file_dependency(c->input, READ, l);
+      check_single_file_dependency(c->output, WRITE, l);
       break;
     }
 }
@@ -365,12 +446,13 @@ execute_command_timetravel(command_t c)
       file_usage_t f = file_dependency->head;
       while (f)
 	{
-	  if (f->pid != 0)
+	  pid_t pre_pid = f->pids->head->pid;
+	  if (pre_pid != 0)
 	    {
 	      //printf("Waiting for %d\n",f->pid);
 	      //int status;
 	      //waitpid(f->pid, &status, 0);	//child cannot wait for another child, so waitpid does not wait
-	      while(kill(f->pid,0)!=-1);	//wait for a non-child process
+	      while(kill(pre_pid,0)!=-1);	//wait for a non-child process
 	    }
 	  f = f->next;	//goto next
 	}
@@ -386,7 +468,7 @@ execute_command_timetravel(command_t c)
       file_usage_t f = file_dependency->head;
       while (f)
 	{
-	  try_add_file_usage(file_usage_stat_all, f->file_name, pid);
+	  try_add_file_usage(file_usage_stat_all, pid, f->file_name, f->pids->head->mode);
 	  f = f->next;
 	}
       //int status;
