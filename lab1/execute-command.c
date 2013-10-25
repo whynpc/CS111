@@ -133,7 +133,7 @@ redirect_input (char *input)
     {
       int infd;
       infd = open(input,O_RDONLY);
-      if(infd==-1){printf("read hehe\n");_exit(-1);}
+      if(infd==-1){printf("Fail to open %s\n",input);_exit(-1);}
       dup2(infd, STDIN_FILENO);
       close(infd);
     }
@@ -146,7 +146,7 @@ redirect_output (char *output)
     {
       int outfd;
       outfd = open(output,O_RDWR|O_CREAT|O_TRUNC, 0644);
-      if(outfd==-1){printf("write hehe\n");_exit(-1);}
+      if(outfd==-1){printf("Fail to open %s\n",output);_exit(-1);}
       dup2(outfd, STDOUT_FILENO);
       close(outfd);
     }
@@ -367,9 +367,9 @@ execute_command_timetravel(command_t c)
 	{
 	  if (f->pid != 0)
 	    {
-	      printf("Waiting for %d\n",pid);
+	      printf("Waiting for %d\n",f->pid);
 	      int status  = 0;
-	      waitpid(pid, &status, 0);	//blocked mode, wait until this process exits
+	      waitpid(f->pid, &status, 0);	//blocked mode, wait until this process exits
 	    }
 	  f = f->next;	//goto next
 	}
@@ -378,8 +378,8 @@ execute_command_timetravel(command_t c)
     }
   else if (pid > 0)
     {
-      printf("pid=%d ", pid);
-      print_command(c);
+      //printf("pid=%d ", pid);
+      //print_command(c);
       file_usage_t f = file_dependency->head;
       while (f)
 	{

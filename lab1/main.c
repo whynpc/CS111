@@ -78,7 +78,12 @@ main (int argc, char **argv)
     }
 
   int status;
-  waitpid(-1, &status, 0); 
+  while(waitpid(-1, &status, 0))	//wait until all children exit
+  {
+	if(errno==ECHILD)
+          break;
+  }
+  //waitpid(-1, &status, 0); 
 	
   return print_tree || !last_command ? 0 : command_status (last_command);
 }
