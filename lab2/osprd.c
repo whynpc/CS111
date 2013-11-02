@@ -122,6 +122,19 @@ static void osprd_process_request(osprd_info_t *d, struct request *req)
 
 	// Your code here.
 	eprintk("Should process request...\n");
+	if (req->current_nr_sectors > nsectors) {
+		// issue error	
+	}
+
+	long offset = req->sector * SECTOR_SIZE;
+	long data_len = req->current_nr_sectors * SECTOR_SIZE;
+	if (rq_data_dir(req) == WRITE) {
+		memcpy(d->data + offset, req->buffer, data_len);	
+	} else if (rq_data_dir(req) == READ) {
+		memcpy(req->buffer, d->data + offset, data_len);
+	} else {
+		// issue error
+	}
 
 	end_request(req, 1);
 }
