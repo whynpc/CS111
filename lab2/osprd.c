@@ -52,6 +52,8 @@ typedef struct osprd_info {
 
 	osp_spinlock_t mutex;           // Mutex for synchronizing access to
 					// this block device
+					// NOTE: this is NOT reader-writer lock
+					// only used for protecting internal variables
 
 	unsigned ticket_head;		// Currently running ticket for
 					// the device lock
