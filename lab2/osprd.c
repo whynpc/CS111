@@ -238,7 +238,7 @@ static int osprd_close_last(struct inode *inode, struct file *filp)
 		// as appropriate.
 
 		// Your code here.
-		if (filp->f_flags && F_OSPRD_LOCKED) {
+		if (filp->f_flags & F_OSPRD_LOCKED) {
 			osprd_ioctl(inode, filp, OSPRDIOCRELEASE, 0);
 		}
 
@@ -397,7 +397,7 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 		// you need, and return 0.
 
 		// Your code here (instead of the next line).
-
+		eprintk("release\n");
 		osp_spin_lock(&d->mutex);
 		if (filp->f_flags & F_OSPRD_LOCKED > 0) {
 			filp->f_flags &= ~F_OSPRD_LOCKED;
@@ -430,6 +430,9 @@ static void osprd_setup(osprd_info_t *d)
 	osp_spin_lock_init(&d->mutex);
 	d->ticket_head = d->ticket_tail = 0;
 	/* Add code here if you add fields to osprd_info_t. */
+	d->write_lock_cnt = 0;
+	d->read_lock_cnt = 0;
+	invalid_tickets.head = NULL;
 }
 
 
