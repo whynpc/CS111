@@ -64,6 +64,8 @@ typedef struct osprd_info {
 
 	/* HINT: You may want to add additional fields to help
 	         in detecting deadlock. */
+	unsigned read_lock_cnt;
+	unsigned write_lock_cnt;
 
 	// The following elements are used internally; you don't need
 	// to understand them.
@@ -130,8 +132,10 @@ static void osprd_process_request(osprd_info_t *d, struct request *req)
 	long data_len = req->current_nr_sectors * SECTOR_SIZE;
 	if (rq_data_dir(req) == WRITE) {
 		memcpy(d->data + offset, req->buffer, data_len);	
+		//copy_from_user(d->data + offset, req->buffer, data_len);	
 	} else if (rq_data_dir(req) == READ) {
 		memcpy(req->buffer, d->data + offset, data_len);
+		//copy_to_user(req->buffer, d->data + offset, data_len);
 	} else {
 		// issue error
 	}
@@ -236,7 +240,37 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 
 		// Your code here (instead of the next two lines).
 		eprintk("Attempting to acquire\n");
-		r = -ENOTTY;
+
+		unsigned local_ticket = d->ticket_head;
+		osp_spin_lock(&d->mutex);
+		d->ticket_head ++;
+		osp_spin_unlock(&d->mutex);
+
+		r = wait_event_interruptible(d->blockq, 
+				d->mutex.lock == 0 // cannot osp_spin_lock() here!
+				&& d->write_lock_cnt == 0 // no writer before current proc
+				&& (!filp_writable	// current proc is reader 
+					|| d->read_lock_cnt == 0) // no reader before current proc (writer)
+				&& d->ticket_tail == local_ticket // it's the turn for the ticket of current proc
+				);
+
+		if (r < 0) {
+			return r; // immediately return to caller as required
+		} else {
+			osp_spin_lock(&d->mutex);
+			filp->f_flags |= F_OSPRD_LOCKED; // this is locking the ramdisk
+			if (filp_writable) {
+				d->write_lock_cnt ++;
+			} else {
+				d->read_lock_cnt ++;
+			}
+			d->ticket_tail ++; // proceed to next ticket
+			osp_spin_unlock(&d->mutex);
+			r = 0;
+		}
+
+		wake_up_all(&d->blockq);
+
 
 	} else if (cmd == OSPRDIOCTRYACQUIRE) {
 
@@ -249,7 +283,26 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 
 		// Your code here (instead of the next two lines).
 		eprintk("Attempting to try acquire\n");
-		r = -ENOTTY;
+		
+		osp_spin_lock(&d->mutex); // we can do this here because this branch not to block
+		if (d->write_lock_cnt == 0 
+				&& (!filp_writable || d->read_lock_cnt) 
+					&& filp->f_flags & F_OSPRD_LOCKED == 0) {
+			// grab the log immediately
+			filp->f_flags |= F_OSPRD_LOCKED; // this is locking the ramdisk
+			if (filp_writable) {
+				d->write_lock_cnt ++;
+			} else {
+				d->read_lock_cnt ++;
+			}
+			// nobody waiting so no need to update ticket
+			// this one never wait so no need to set  a local_ticket
+			r = 0;
+		} else {
+			r = -EBUSY;		
+		}
+		osp_spin_unlock(&d->mutex);
+		
 
 	} else if (cmd == OSPRDIOCRELEASE) {
 
@@ -261,7 +314,23 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 		// you need, and return 0.
 
 		// Your code here (instead of the next line).
-		r = -ENOTTY;
+
+		osp_spin_lock(&d->mutex);
+		if (filp->f_flags & F_OSPRD_LOCKED > 0) {
+			filp->f_flags &= ~F_OSPRD_LOCKED;
+			if (filp_writable) {
+				d->write_lock_cnt --;
+			} else {
+				d->read_lock_cnt --;
+			}
+			
+		} else {
+			// non-lock holder try to release; give some error
+			r = -EINVAL;
+		}
+
+		osp_spin_unlock(&d->mutex);
+		wake_up_all(&d->blockq);
 
 	} else
 		r = -ENOTTY; /* unknown command */
