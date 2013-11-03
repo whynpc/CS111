@@ -79,6 +79,70 @@ typedef struct osprd_info {
 static osprd_info_t osprds[NOSPRD];
 
 
+struct ticket_queue_node {
+	unsigned ticket;
+	struct ticket_queue_node *next;
+};
+typedef struct ticket_queue_node* ticket_queue_node_t;
+
+struct ticket_queue {
+	struct ticket_queue_node *head;
+};
+typedef struct ticket_queue* ticket_queue_t;
+
+struct ticket_queue invalid_tickets;
+
+void add_ticket(ticket_queue_t q, unsigned ticket) {
+	if (!q->head) {
+		q->head = kmalloc(sizeof(struct ticket_queue_node), GFP_ATOMIC);
+		q->head->ticket = ticket;
+		q->head->next = NULL;
+		return;
+	} else if (q->head->ticket == ticket) {
+		return;
+	} else if (q->head->ticket > ticket) {
+		ticket_queue_node_t p = kmalloc(sizeof(struct ticket_queue_node), GFP_ATOMIC);
+		p->ticket = ticket;
+		p->next = q->head;		
+		q->head = p;	
+		return;
+	}
+
+	ticket_queue_node_t p1, p2;
+	p1 = q->head;
+	p2 = p1->next;
+	while (p2 && p2->ticket < ticket) {
+		p1 = p2;
+		p2 = p2->next;	
+	}
+	if (p2 && p2->ticket == ticket) {
+		return;	
+	} else {
+		ticket_queue_node_t p = kmalloc(sizeof(struct ticket_queue_node), GFP_ATOMIC);
+		p->ticket = ticket;
+		p->next = p2;
+		p1->next = p;
+	}
+}
+
+void find_next_valid_ticket(ticket_queue_t q, unsigned *ticket_tail) {
+	unsigned ticket = *ticket_tail + 1;
+	while (1) {
+		if (!q->head || q->head->ticket > ticket) {
+			break;
+		} else {
+			if (q->head->ticket == ticket) {
+				ticket ++;
+			}
+			ticket_queue_node_t p = q->head;
+			q->head = q->head->next;
+			kfree(p);
+			continue;		
+		}
+	}
+
+}
+
 // Declare useful helper functions
 
 /*
@@ -154,6 +218,8 @@ static int osprd_open(struct inode *inode, struct file *filp)
 	return 0;
 }
 
+int osprd_ioctl(struct inode *inode, struct file *filp,
+		unsigned int cmd, unsigned long arg);
 
 // This function is called when a /dev/osprdX file is finally closed.
 // (If the file descriptor was dup2ed, this function is called only when the
@@ -169,6 +235,9 @@ static int osprd_close_last(struct inode *inode, struct file *filp)
 		// as appropriate.
 
 		// Your code here.
+		if (filp->f_flags && F_OSPRD_LOCKED) {
+			osprd_ioctl(inode, filp, OSPRDIOCRELEASE, 0);
+		}
 
 		// This line avoids compiler warnings; you may remove it.
 		(void) filp_writable, (void) d;
@@ -241,6 +310,12 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 		// Your code here (instead of the next two lines).
 		eprintk("Attempting to acquire\n");
 
+		if (filp->f_flags & F_OSPRD_LOCKED) {
+			return -EDEADLK;
+		}
+
+		eprintk("read_lock_cnt=%d, write_lock_cnt=%d\n", d->read_lock_cnt, d->write_lock_cnt);
+
 		unsigned local_ticket = d->ticket_head;
 		osp_spin_lock(&d->mutex);
 		d->ticket_head ++;
@@ -254,8 +329,11 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 				&& d->ticket_tail == local_ticket // it's the turn for the ticket of current proc
 				);
 
-		if (r < 0) {
-			return r; // immediately return to caller as required
+
+		if (r != 0) {
+			// return by signal
+			add_ticket(&invalid_tickets, local_ticket);
+			r = -ERESTARTSYS;
 		} else {
 			osp_spin_lock(&d->mutex);
 			filp->f_flags |= F_OSPRD_LOCKED; // this is locking the ramdisk
