@@ -140,6 +140,7 @@ void find_next_valid_ticket(ticket_queue_t q, unsigned *ticket_tail) {
 			continue;		
 		}
 	}
+	*ticket_tail = ticket;
 
 }
 
@@ -342,7 +343,9 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 			} else {
 				d->read_lock_cnt ++;
 			}
-			d->ticket_tail ++; // proceed to next ticket
+			
+			//d->ticket_tail ++; // proceed to next ticket
+			find_next_valid_ticket(&invalid_tickets, &d->ticket_tail);
 			osp_spin_unlock(&d->mutex);
 			r = 0;
 		}
