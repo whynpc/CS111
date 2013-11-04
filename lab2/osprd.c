@@ -370,8 +370,7 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 		
 		osp_spin_lock(&d->mutex); // we can do this here because this branch not to block
 		if (d->write_lock_cnt == 0 
-				&& (!filp_writable || d->read_lock_cnt) 
-					&& filp->f_flags & F_OSPRD_LOCKED == 0) {
+				&& (!filp_writable || d->read_lock_cnt == 0)) {
 			// grab the log immediately
 			filp->f_flags |= F_OSPRD_LOCKED; // this is locking the ramdisk
 			if (filp_writable) {
