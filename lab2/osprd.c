@@ -370,9 +370,14 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 		// Your code here (instead of the next two lines).
 		//eprintk("Attempting to acquire\n");
 		unsigned local_ticket;
+		osp_spin_lock(&d->mutex);
 		if (has_pid(&d->locking_procs, current->pid)) {
-			return -EDEADLK;
+			r = -EDEADLK;
 		}
+		osp_spin_unlock(&d->mutex);
+
+		if (r != 0)
+			return r;
 
 		//eprintk("read_lock_cnt=%d, write_lock_cnt=%d\n", d->read_lock_cnt, d->write_lock_cnt);
 
@@ -405,8 +410,8 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 			}	
 			//d->ticket_tail ++; // proceed to next ticket
 			find_next_valid_ticket(&invalid_tickets, &d->ticket_tail, 1);
-			osp_spin_unlock(&d->mutex);
 			add_pid(&d->locking_procs, current->pid);
+			osp_spin_unlock(&d->mutex);
 			r = 0;
 		}
 
@@ -470,9 +475,9 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 			// non-lock holder try to release; give some error
 			r = -EINVAL;
 		}
-
-		osp_spin_unlock(&d->mutex);
 		remove_pid(&d->locking_procs, current->pid);
+		osp_spin_unlock(&d->mutex);
+
 		wake_up_all(&d->blockq);
 
 	} else
