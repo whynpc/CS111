@@ -311,13 +311,13 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 		// be protected by a spinlock; which ones?)
 
 		// Your code here (instead of the next two lines).
-		eprintk("Attempting to acquire\n");
+		//eprintk("Attempting to acquire\n");
 
 		if (filp->f_flags & F_OSPRD_LOCKED) {
 			return -EDEADLK;
 		}
 
-		eprintk("read_lock_cnt=%d, write_lock_cnt=%d\n", d->read_lock_cnt, d->write_lock_cnt);
+		//eprintk("read_lock_cnt=%d, write_lock_cnt=%d\n", d->read_lock_cnt, d->write_lock_cnt);
 
 		unsigned local_ticket = d->ticket_head;
 		osp_spin_lock(&d->mutex);
@@ -366,7 +366,7 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 		// Otherwise, if we can grant the lock request, return 0.
 
 		// Your code here (instead of the next two lines).
-		eprintk("Attempting to try acquire");
+		//eprintk("Attempting to try acquire");
 		
 		osp_spin_lock(&d->mutex); // we can do this here because this branch not to block
 		if (d->write_lock_cnt == 0 
@@ -398,7 +398,7 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 		// you need, and return 0.
 
 		// Your code here (instead of the next line).
-		eprintk("release: writable");
+		//eprintk("release: writable");
 		osp_spin_lock(&d->mutex);
 		if (filp->f_flags & F_OSPRD_LOCKED) {
 			filp->f_flags &= ~F_OSPRD_LOCKED;
