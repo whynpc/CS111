@@ -133,6 +133,12 @@ pid_node_t has_pid(struct pid_list *l, int pid) {
 
 void remove_pid(struct pid_list *l, int pid) {
 	pid_node_t p = has_pid(l, pid);
+	if (p == l->head) {
+		l->head = p->next;
+	}
+	if (p == l->tail) {
+		l->tail = p->prev;
+	}
 	if (p) {
 		if (p->prev) {
 			p->prev->next = p->next;
@@ -398,8 +404,8 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 			}	
 			//d->ticket_tail ++; // proceed to next ticket
 			find_next_valid_ticket(&invalid_tickets, &d->ticket_tail, 1);
-			add_pid(&d->locking_procs, current->pid);
 			osp_spin_unlock(&d->mutex);
+			add_pid(&d->locking_procs, current->pid);
 			r = 0;
 		}
 
@@ -457,7 +463,7 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 			} else {
 				d->read_lock_cnt --;
 			}
-			remove_pid(&d->locking_procs, current->pid);
+
 			
 		} else {
 			// non-lock holder try to release; give some error
@@ -465,6 +471,7 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 		}
 
 		osp_spin_unlock(&d->mutex);
+		remove_pid(&d->locking_procs, current->pid);
 		wake_up_all(&d->blockq);
 
 	} else
