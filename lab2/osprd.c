@@ -127,8 +127,8 @@ void add_ticket(ticket_queue_t q, unsigned ticket) {
 	}
 }
 
-void find_next_valid_ticket(ticket_queue_t q, unsigned *ticket_tail) {
-	unsigned ticket = *ticket_tail + 1;
+void find_next_valid_ticket(ticket_queue_t q, unsigned *ticket_tail, unsigned finished) {
+	unsigned ticket = *ticket_tail + finished;
 	while (1) {
 		if (!q->head || q->head->ticket > ticket) {
 			break;
@@ -336,6 +336,7 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 		if (r != 0) {
 			// return by signal
 			add_ticket(&invalid_tickets, local_ticket);
+			find_next_valid_ticket(&invalid_tickets, &d->ticket_tail, 0);
 			r = -ERESTARTSYS;
 		} else {
 			osp_spin_lock(&d->mutex);
@@ -347,7 +348,7 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 			}
 			
 			//d->ticket_tail ++; // proceed to next ticket
-			find_next_valid_ticket(&invalid_tickets, &d->ticket_tail);
+			find_next_valid_ticket(&invalid_tickets, &d->ticket_tail, 1);
 			osp_spin_unlock(&d->mutex);
 			r = 0;
 		}
