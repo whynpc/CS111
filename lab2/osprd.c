@@ -151,6 +151,7 @@ void remove_pid(struct pid_list *l, int pid) {
 }
 
 void add_ticket(ticket_queue_t q, unsigned ticket) {
+	ticket_queue_node_t p1, p2;
 	if (!q->head) {
 		q->head = kmalloc(sizeof(struct ticket_queue_node), GFP_ATOMIC);
 		q->head->ticket = ticket;
@@ -166,7 +167,6 @@ void add_ticket(ticket_queue_t q, unsigned ticket) {
 		return;
 	}
 
-	ticket_queue_node_t p1, p2;
 	p1 = q->head;
 	p2 = p1->next;
 	while (p2 && p2->ticket < ticket) {
@@ -189,10 +189,10 @@ void find_next_valid_ticket(ticket_queue_t q, unsigned *ticket_tail, unsigned fi
 		if (!q->head || q->head->ticket > ticket) {
 			break;
 		} else {
+			ticket_queue_node_t p = q->head;
 			if (q->head->ticket == ticket) {
 				ticket ++;
 			}
-			ticket_queue_node_t p = q->head;
 			q->head = q->head->next;
 			kfree(p);
 			continue;		
@@ -232,6 +232,7 @@ static void for_each_open_file(struct task_struct *task,
  */
 static void osprd_process_request(osprd_info_t *d, struct request *req)
 {
+	long offset, data_len;
 	if (!blk_fs_request(req)) {
 		end_request(req, 0);
 		return;
@@ -251,8 +252,8 @@ static void osprd_process_request(osprd_info_t *d, struct request *req)
 		// issue error	
 	}
 
-	long offset = req->sector * SECTOR_SIZE;
-	long data_len = req->current_nr_sectors * SECTOR_SIZE;
+	offset = req->sector * SECTOR_SIZE;
+	data_len = req->current_nr_sectors * SECTOR_SIZE;
 	if (rq_data_dir(req) == WRITE) {
 		memcpy(d->data + offset, req->buffer, data_len);	
 		//copy_from_user(d->data + offset, req->buffer, data_len);	
@@ -368,14 +369,14 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 
 		// Your code here (instead of the next two lines).
 		//eprintk("Attempting to acquire\n");
-
+		unsigned local_ticket;
 		if (has_pid(&d->locking_procs, current->pid)) {
 			return -EDEADLK;
 		}
 
 		//eprintk("read_lock_cnt=%d, write_lock_cnt=%d\n", d->read_lock_cnt, d->write_lock_cnt);
 
-		unsigned local_ticket = d->ticket_head;
+		local_ticket = d->ticket_head;
 		osp_spin_lock(&d->mutex);
 		d->ticket_head ++;
 		osp_spin_unlock(&d->mutex);
