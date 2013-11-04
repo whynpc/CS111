@@ -44,6 +44,19 @@ MODULE_AUTHOR("Skeletor");
 static int nsectors = 32;
 module_param(nsectors, int, 0);
 
+struct pid_node {
+	int pid;
+	struct pid_node *next;
+	struct pid_node *prev;
+};
+typedef struct pid_node*  pid_node_t;
+
+struct pid_list {
+	pid_node_t head;
+	pid_node_t tail;
+};
+
+
 
 /* The internal representation of our device. */
 typedef struct osprd_info {
@@ -68,6 +81,7 @@ typedef struct osprd_info {
 	         in detecting deadlock. */
 	unsigned read_lock_cnt;
 	unsigned write_lock_cnt;
+	struct pid_list locking_procs;
 
 	// The following elements are used internally; you don't need
 	// to understand them.
@@ -93,6 +107,42 @@ struct ticket_queue {
 typedef struct ticket_queue* ticket_queue_t;
 
 struct ticket_queue invalid_tickets;
+
+void add_pid(struct pid_list *l, int pid) {
+	pid_node_t node = kmalloc(sizeof(struct pid_node), GFP_ATOMIC);
+	node->pid = pid;
+	node->next = NULL;
+	node->prev = NULL;
+	if (l->head && l->tail) {
+		l->tail->next = node;
+		node->prev = l->tail;
+		l->tail = node;
+	} else {
+		l->head = node;
+		l->tail = node;
+	}
+}
+
+pid_node_t has_pid(struct pid_list *l, int pid) {
+	pid_node_t p = l->head;
+	while (p && p->pid != pid) {
+		p = p->next;
+	}
+	return p;
+}
+
+void remove_pid(struct pid_list *l, int pid) {
+	pid_node_t p = has_pid(l, pid);
+	if (p) {
+		if (p->prev) {
+			p->prev->next = p->next;
+		}
+		if (p->next) {
+			p->next->prev = p->prev;
+		}
+		kfree(p);
+	}
+}
 
 void add_ticket(ticket_queue_t q, unsigned ticket) {
 	if (!q->head) {
@@ -313,7 +363,7 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 		// Your code here (instead of the next two lines).
 		//eprintk("Attempting to acquire\n");
 
-		if (filp->f_flags & F_OSPRD_LOCKED) {
+		if (has_pid(&d->locking_procs, current->pid)) {
 			return -EDEADLK;
 		}
 
@@ -345,10 +395,10 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 				d->write_lock_cnt ++;
 			} else {
 				d->read_lock_cnt ++;
-			}
-			
+			}	
 			//d->ticket_tail ++; // proceed to next ticket
 			find_next_valid_ticket(&invalid_tickets, &d->ticket_tail, 1);
+			add_pid(&d->locking_procs, current->pid);
 			osp_spin_unlock(&d->mutex);
 			r = 0;
 		}
@@ -378,6 +428,7 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 			} else {
 				d->read_lock_cnt ++;
 			}
+			add_pid(&d->locking_procs, current->pid);
 			// nobody waiting so no need to update ticket
 			// this one never wait so no need to set  a local_ticket
 			r = 0;
@@ -406,6 +457,7 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 			} else {
 				d->read_lock_cnt --;
 			}
+			remove_pid(&d->locking_procs, current->pid);
 			
 		} else {
 			// non-lock holder try to release; give some error
@@ -433,6 +485,8 @@ static void osprd_setup(osprd_info_t *d)
 	d->write_lock_cnt = 0;
 	d->read_lock_cnt = 0;
 	invalid_tickets.head = NULL;
+	d->locking_procs.head = NULL;
+	d->locking_procs.tail = NULL;
 }
 
 
