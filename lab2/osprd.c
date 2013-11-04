@@ -385,7 +385,7 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 
 		if (r != 0) {
 			// return upon deadlock
-			wake_up_all(&d->blockq);
+			//wake_up_all(&d->blockq);
 			return r;
 		}
 
@@ -451,7 +451,8 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 			r = -EBUSY;		
 		}
 		osp_spin_unlock(&d->mutex);
-		
+
+		wake_up_all(&d->blockq);		
 
 	} else if (cmd == OSPRDIOCRELEASE) {
 
