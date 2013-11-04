@@ -46,6 +46,7 @@ module_param(nsectors, int, 0);
 
 struct pid_node {
 	int pid;
+	unsigned ticket;
 	struct pid_node *next;
 	struct pid_node *prev;
 };
@@ -108,9 +109,10 @@ static osprd_info_t osprds[NOSPRD];
 
 
 
-void add_pid(struct pid_list *l, int pid) {
+void add_pid(struct pid_list *l, int pid, unsigned ticket) {
 	pid_node_t node = kmalloc(sizeof(struct pid_node), GFP_ATOMIC);
 	node->pid = pid;
+	node->ticket = ticket;
 	node->next = NULL;
 	node->prev = NULL;
 	if (l->head && l->tail) {
@@ -131,8 +133,62 @@ pid_node_t has_pid(struct pid_list *l, int pid) {
 	return p;
 }
 
+pid_node_t has_pid_r(struct pid_list *l, int pid) {
+	pid_node_t p = l->tail;
+	while (p && p->pid != pid) {
+		p = p->prev;
+	}
+	return p;
+}
+
+pid_node_t has_pid_until(struct pid_list *l, int pid, pid_node_t end_node) {
+	pid_node_t p = l->head;
+	while (p && p != end_node && p->pid != pid) {
+		p = p->next;
+	}
+	return p;
+}
+
+pid_node_t has_pid_ticket(struct pid_list *l, int pid, unsigned ticket) {
+	pid_node_t p = l->head;
+	while (p && p->pid != pid && p->ticket != ticket) {
+		p = p->next;
+	}
+	return p;
+}
+
 void remove_pid(struct pid_list *l, int pid) {
 	pid_node_t p = has_pid(l, pid);
+	if (p == l->head) {
+		l->head = p->next;
+	}
+	if (p == l->tail) {
+		l->tail = p->prev;
+	}
+	if (p) {
+		if (p->prev) {
+			p->prev->next = p->next;
+		}
+		if (p->next) {
+			p->next->prev = p->prev;
+		}
+		kfree(p);
+	}
+}
+
+void clean_pid_list(struct pid_list *l) {
+	pid_node_t p = l->head;
+	while (p) {
+		pid_node_t t = p;
+		p = p->next;
+		kfree(t);
+	}
+	l->head = NULL;
+	l->tail = NULL;
+}
+
+void remove_pid_ticket(struct pid_list *l, int pid, unsigned ticket) {
+	pid_node_t p = has_pid_ticket(l, pid, ticket);
 	if (p == l->head) {
 		l->head = p->next;
 	}
@@ -308,6 +364,55 @@ static int osprd_close_last(struct inode *inode, struct file *filp)
 }
 
 
+int check_deadlock(osprd_info_t *d) {
+	// aleady got the spin_lock in d
+	int r = 0;
+	if (has_pid(&d->locking_procs, current->pid)) {
+		r = 1;
+	} else {
+		struct pid_list dependencies;
+		pid_node_t p;
+		int i;
+		dependencies.head = NULL;
+		dependencies.tail = NULL;
+		p = d->locking_procs.head;
+		while (p) {
+			add_pid(&dependencies, p->pid, p->ticket);
+			p = p->next;
+		}
+
+		for (i = 0; i < NOSPRD; i ++) {
+			osprd_info_t *od = &osprds[i];
+			if (od == d)
+				continue;
+			
+			osp_spin_lock(&od->mutex);
+			p = dependencies.head;
+			while (p) {
+				pid_node_t op;
+				op = has_pid_r(&od->locking_procs, p->pid);
+				if (op) {
+					if (has_pid_until(&od->locking_procs, current->pid, op)) {
+						r = 1;
+						break;
+					}
+				}
+
+				p = p->next;
+			}
+			osp_spin_unlock(&od->mutex);
+
+			if (r != 0) {
+				break;
+			}
+		}
+
+		clean_pid_list(&dependencies);
+	}
+
+	return r;
+}
+
 /*
  * osprd_lock
  */
@@ -326,7 +431,7 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 	int filp_writable = (filp->f_mode & FMODE_WRITE) != 0;
 
 	// This line avoids compiler warnings; you may remove it.
-	(void) filp_writable, (void) d;
+	//(void) filp_writable, (void) d;
 
 	// Set 'r' to the ioctl's return value: 0 on success, negative on error
 
@@ -374,12 +479,13 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 		//eprintk("read_lock_cnt=%d, write_lock_cnt=%d\n", d->read_lock_cnt, d->write_lock_cnt);
 
 		osp_spin_lock(&d->mutex);
-		if (has_pid(&d->locking_procs, current->pid)) {
+		//if (has_pid(&d->locking_procs, current->pid)) {
+		if (check_deadlock(d)) {
 			r = -EDEADLK;
 		} else {
 			local_ticket = d->ticket_head;
 			d->ticket_head ++;
-			add_pid(&d->locking_procs, current->pid);
+			add_pid(&d->locking_procs, current->pid, local_ticket);
 		}
 		osp_spin_unlock(&d->mutex);
 
@@ -402,7 +508,7 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 			// return by signal
 			add_ticket(&d->invalid_tickets, local_ticket);
 			find_next_valid_ticket(&d->invalid_tickets, &d->ticket_tail, 0);
-			remove_pid(&d->locking_procs, current->pid);
+			remove_pid_ticket(&d->locking_procs, current->pid, local_ticket);
 			r = -ERESTARTSYS;
 		} else {
 			osp_spin_lock(&d->mutex);
@@ -411,8 +517,8 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 				d->write_lock_cnt ++;
 			} else {
 				d->read_lock_cnt ++;
-			}	
-			//d->ticket_tail ++; // proceed to next ticket
+			}
+
 			find_next_valid_ticket(&d->invalid_tickets, &d->ticket_tail, 1);
 			osp_spin_unlock(&d->mutex);
 			r = 0;
@@ -432,8 +538,10 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 
 		// Your code here (instead of the next two lines).
 		//eprintk("Attempting to try acquire");
-		
+	
+		unsigned local_ticket;
 		osp_spin_lock(&d->mutex); // we can do this here because this branch not to block
+		local_ticket = d->ticket_head ++;		
 		if (d->write_lock_cnt == 0 
 				&& (!filp_writable || d->read_lock_cnt == 0)) {
 			// grab the log immediately
@@ -443,13 +551,14 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 			} else {
 				d->read_lock_cnt ++;
 			}
-			add_pid(&d->locking_procs, current->pid);
+			add_pid(&d->locking_procs, current->pid, local_ticket);
 			// nobody waiting so no need to update ticket
 			// this one never wait so no need to set  a local_ticket
 			r = 0;
 		} else {
 			r = -EBUSY;		
 		}
+		d->ticket_tail = local_ticket + 1;
 		osp_spin_unlock(&d->mutex);
 
 		wake_up_all(&d->blockq);		
