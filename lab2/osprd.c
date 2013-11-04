@@ -190,7 +190,7 @@ static void osprd_process_request(osprd_info_t *d, struct request *req)
 	// 'req->buffer' members, and the rq_data_dir() function.
 
 	// Your code here.
-	eprintk("Should process request...\n");
+	//eprintk("Should process request...\n");
 	if (req->current_nr_sectors > nsectors) {
 		// issue error	
 	}
@@ -365,7 +365,7 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 		// Otherwise, if we can grant the lock request, return 0.
 
 		// Your code here (instead of the next two lines).
-		eprintk("Attempting to try acquire\n");
+		eprintk("Attempting to try acquire");
 		
 		osp_spin_lock(&d->mutex); // we can do this here because this branch not to block
 		if (d->write_lock_cnt == 0 
@@ -397,9 +397,9 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 		// you need, and return 0.
 
 		// Your code here (instead of the next line).
-		eprintk("release\n");
+		eprintk("release: writable");
 		osp_spin_lock(&d->mutex);
-		if (filp->f_flags & F_OSPRD_LOCKED > 0) {
+		if (filp->f_flags & F_OSPRD_LOCKED) {
 			filp->f_flags &= ~F_OSPRD_LOCKED;
 			if (filp_writable) {
 				d->write_lock_cnt --;
