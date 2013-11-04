@@ -56,6 +56,17 @@ struct pid_list {
 	pid_node_t tail;
 };
 
+struct ticket_queue_node {
+	unsigned ticket;
+	struct ticket_queue_node *next;
+};
+typedef struct ticket_queue_node* ticket_queue_node_t;
+
+struct ticket_queue {
+	struct ticket_queue_node *head;
+};
+typedef struct ticket_queue* ticket_queue_t;
+
 
 
 /* The internal representation of our device. */
@@ -81,6 +92,7 @@ typedef struct osprd_info {
 	         in detecting deadlock. */
 	unsigned read_lock_cnt;
 	unsigned write_lock_cnt;
+	struct ticket_queue invalid_tickets;
 	struct pid_list locking_procs;
 
 	// The following elements are used internally; you don't need
@@ -95,18 +107,6 @@ typedef struct osprd_info {
 static osprd_info_t osprds[NOSPRD];
 
 
-struct ticket_queue_node {
-	unsigned ticket;
-	struct ticket_queue_node *next;
-};
-typedef struct ticket_queue_node* ticket_queue_node_t;
-
-struct ticket_queue {
-	struct ticket_queue_node *head;
-};
-typedef struct ticket_queue* ticket_queue_t;
-
-struct ticket_queue invalid_tickets;
 
 void add_pid(struct pid_list *l, int pid) {
 	pid_node_t node = kmalloc(sizeof(struct pid_node), GFP_ATOMIC);
@@ -370,21 +370,24 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 		// Your code here (instead of the next two lines).
 		//eprintk("Attempting to acquire\n");
 		unsigned local_ticket;
-		osp_spin_lock(&d->mutex);
-		if (has_pid(&d->locking_procs, current->pid)) {
-			r = -EDEADLK;
-		}
-		osp_spin_unlock(&d->mutex);
-
-		if (r != 0)
-			return r;
 
 		//eprintk("read_lock_cnt=%d, write_lock_cnt=%d\n", d->read_lock_cnt, d->write_lock_cnt);
 
-		local_ticket = d->ticket_head;
 		osp_spin_lock(&d->mutex);
-		d->ticket_head ++;
+		if (has_pid(&d->locking_procs, current->pid)) {
+			r = -EDEADLK;
+		} else {
+			local_ticket = d->ticket_head;
+			d->ticket_head ++;
+			add_pid(&d->locking_procs, current->pid);
+		}
 		osp_spin_unlock(&d->mutex);
+
+		if (r != 0) {
+			// return upon deadlock
+			wake_up_all(&d->blockq);
+			return r;
+		}
 
 		r = wait_event_interruptible(d->blockq, 
 				d->mutex.lock == 0 // cannot osp_spin_lock() here!
@@ -397,8 +400,9 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 
 		if (r != 0) {
 			// return by signal
-			add_ticket(&invalid_tickets, local_ticket);
-			find_next_valid_ticket(&invalid_tickets, &d->ticket_tail, 0);
+			add_ticket(&d->invalid_tickets, local_ticket);
+			find_next_valid_ticket(&d->invalid_tickets, &d->ticket_tail, 0);
+			remove_pid(&d->locking_procs, current->pid);
 			r = -ERESTARTSYS;
 		} else {
 			osp_spin_lock(&d->mutex);
@@ -409,8 +413,7 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 				d->read_lock_cnt ++;
 			}	
 			//d->ticket_tail ++; // proceed to next ticket
-			find_next_valid_ticket(&invalid_tickets, &d->ticket_tail, 1);
-			add_pid(&d->locking_procs, current->pid);
+			find_next_valid_ticket(&d->invalid_tickets, &d->ticket_tail, 1);
 			osp_spin_unlock(&d->mutex);
 			r = 0;
 		}
@@ -497,7 +500,7 @@ static void osprd_setup(osprd_info_t *d)
 	/* Add code here if you add fields to osprd_info_t. */
 	d->write_lock_cnt = 0;
 	d->read_lock_cnt = 0;
-	invalid_tickets.head = NULL;
+	d->invalid_tickets.head = NULL;
 	d->locking_procs.head = NULL;
 	d->locking_procs.tail = NULL;
 }
