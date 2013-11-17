@@ -1304,7 +1304,8 @@ ospfs_link(struct dentry *src_dentry, struct inode *dir, struct dentry *dst_dent
 	  return PTR_ERR(newentry);
 
 	newentry->od_ino = src_dentry->d_inode->i_ino;
-	strcpy(newentry->od_name, dst_dentry->d_name.name);
+	//strcpy(newentry->od_name, dst_dentry->d_name.name);
+	memcpy(newentry->od_name, dst_dentry->d_name.name, dst_dentry->d_name.len);
 
 	//copy inode number
 	dst_dentry->d_inode->i_ino = src_dentry->d_inode->i_ino;
@@ -1351,7 +1352,50 @@ ospfs_create(struct inode *dir, struct dentry *dentry, int mode, struct nameidat
 	ospfs_inode_t *dir_oi = ospfs_inode(dir->i_ino);
 	uint32_t entry_ino = 0;
 	/* EXERCISE: Your code here. */
-	return -EINVAL; // Replace this line
+	//return -EINVAL; // Replace this line
+	if(dentry->d_name.len>OSPFS_MAXNAMELEN)
+	  return -ENAMETOOLONG;
+
+	ospfs_inode_t *od = ospfs_inode(dir->i_ino);
+
+	ospfs_direntry_t *entry = find_direntry(od, dentry->d_name.name, dentry->d_name.len);
+	if(entry != NULL)//already exists
+	  return -EEXIST;
+
+	//FIXME:finish step 2 and step 3
+	//Find an empty inode
+	uint32_t inodeno;
+	ospfs_inode_t *freeinode;
+	for(inodeno = 0; inodeno != ospfs_super->os_ninodes; inodeno++)
+	{
+		freeinode = ospfs_inode(inodeno + ospfs_super->os_firstinob);
+		if(freeinode->oi_nlink==0)
+			break;
+	}
+	if(inodeno == ospfs_super->os_ninodes)//no available inode
+	  return -ENOSPC;
+	dentry->d_inode->i_ino = inodeno + ospfs_super->os_firstinob;	//seems unnecessary according to comments?
+
+	//initialize the inode
+	freeinode -> oi_size = 0;
+	freeinode -> oi_ftype = OSPFS_FTYPE_REG;
+	freeinode -> oi_nlink = 1;
+	freeinode -> oi_mode = mode;
+	//an empty file, so all blocks are initialized as 0
+	memset(freeinode -> oi_direct, 0, sizeof(uint32_t)*OSPFS_NDIRECT);
+	freeinode -> oi_indirect = 0;
+	freeinode -> oi_indirect2 = 0; 
+
+	//create a new directory entry
+	ospfs_direntry_t *newentry = create_blank_direntry(od);
+	if(IS_ERR(newentry))
+	  return PTR_ERR(newentry);
+
+	newentry->od_ino = inodeno + ospfs_super->os_firstinob;
+	//strcpy(newentry->od_name, dst_dentry->d_name.name);
+	memcpy(newentry->od_name, dentry->d_name.name, dentry->d_name.len);
+
+
 
 	/* Execute this code after your function has successfully created the
 	   file.  Set entry_ino to the created file's inode number before
