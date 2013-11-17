@@ -540,7 +540,7 @@ ospfs_unlink(struct inode *dirino, struct dentry *dentry)
 	ospfs_inode_t *oi = ospfs_inode(dentry->d_inode->i_ino);
 	ospfs_inode_t *dir_oi = ospfs_inode(dentry->d_parent->d_inode->i_ino);
 	int entry_off;
-	ospfs_direntry_t *od;
+	ospfs_direntry_t *od; //the target entry
 
 	od = NULL; // silence compiler warning; entry_off indicates when !od
 	for (entry_off = 0; entry_off < dir_oi->oi_size;
@@ -556,7 +556,11 @@ ospfs_unlink(struct inode *dirino, struct dentry *dentry)
 		printk("<1>ospfs_unlink should not fail!\n");
 		return -ENOENT;
 	}
-
+	
+	//if the name referred to a symlink, the link itself is removed
+	ospfs_inode_t* target = ospfs_inode(od->od_ino);
+	if(target->oi_ftype == OSPFS_FTYPE_SYMLINK)
+		target->oi_nlink = 0;
 	od->od_ino = 0;
 	oi->oi_nlink--;
 	return 0;
@@ -1298,6 +1302,12 @@ ospfs_link(struct dentry *src_dentry, struct inode *dir, struct dentry *dst_dent
 	if(entry != NULL)//already exists
 	  return -EEXIST;
 
+	//copy inode number
+	dst_dentry->d_inode->i_ino = src_dentry->d_inode->i_ino;
+	//update inode count
+	ospfs_inode_t *oi = ospfs_inode(src_dentry->d_inode->i_ino);
+	oi->oi_nlink++;
+
 	//create new directory entry for dir
 	ospfs_direntry_t *newentry = create_blank_direntry(od);
 	if(IS_ERR(newentry))
@@ -1306,12 +1316,8 @@ ospfs_link(struct dentry *src_dentry, struct inode *dir, struct dentry *dst_dent
 	newentry->od_ino = src_dentry->d_inode->i_ino;
 	//strcpy(newentry->od_name, dst_dentry->d_name.name);
 	memcpy(newentry->od_name, dst_dentry->d_name.name, dst_dentry->d_name.len);
+	newentry->od_name[dst_dentry->d_name.len]='\0';
 
-	//copy inode number
-	dst_dentry->d_inode->i_ino = src_dentry->d_inode->i_ino;
-	//update inode count
-	ospfs_inode_t *oi = ospfs_inode(src_dentry->d_inode->i_ino);
-	oi->oi_nlink++;
 	
 
 	return -EINVAL;
@@ -1394,6 +1400,7 @@ ospfs_create(struct inode *dir, struct dentry *dentry, int mode, struct nameidat
 	newentry->od_ino = inodeno + ospfs_super->os_firstinob;
 	//strcpy(newentry->od_name, dst_dentry->d_name.name);
 	memcpy(newentry->od_name, dentry->d_name.name, dentry->d_name.len);
+	newentry->od_name[dentry->d_name.len]='\0';
 
 
 
@@ -1439,7 +1446,48 @@ ospfs_symlink(struct inode *dir, struct dentry *dentry, const char *symname)
 	uint32_t entry_ino = 0;
 
 	/* EXERCISE: Your code here. */
-	return -EINVAL;
+	//   1. Check for the -EEXIST error and find an empty directory entry using the
+	//	helper functions above.
+	//   2. Find an empty inode.  Set the 'entry_ino' variable to its inode number.
+	//   3. Initialize the directory entry and inode.
+	if(dentry->d_name.len>OSPFS_MAXNAMELEN)
+	  return -ENAMETOOLONG;
+
+	ospfs_inode_t *od = ospfs_inode(dir->i_ino);
+
+	ospfs_direntry_t *entry = find_direntry(od, dentry->d_name.name, dentry->d_name.len);
+	if(entry != NULL)//already exists
+	  return -EEXIST;
+	
+	//Find an empty inode
+	uint32_t inodeno;
+	ospfs_symlink_inode_t *freeinode;
+	for(inodeno = 0; inodeno != ospfs_super->os_ninodes; inodeno++)
+	{
+		freeinode = (ospfs_symlink_inode_t*)ospfs_inode(inodeno + ospfs_super->os_firstinob);
+		if(freeinode->oi_nlink==0)
+			break;
+	}
+	if(inodeno == ospfs_super->os_ninodes)//no available inode
+	  return -ENOSPC;
+	dentry->d_inode->i_ino = inodeno + ospfs_super->os_firstinob;	//seems unnecessary according to comments?
+
+	//initialize the inode
+	freeinode -> oi_size = dentry->d_name.len+1;	//including '\0'
+	freeinode -> oi_ftype = OSPFS_FTYPE_SYMLINK;
+	freeinode -> oi_nlink = 1;
+	memcpy(freeinode->oi_symlink, dentry->d_name.name, dentry->d_name.len);
+	freeinode->oi_symlink[dentry->d_name.len]='\0';
+
+	//create a new directory entry
+	ospfs_direntry_t *newentry = create_blank_direntry(od);
+	if(IS_ERR(newentry))
+	  return PTR_ERR(newentry);
+
+	newentry->od_ino = inodeno + ospfs_super->os_firstinob;
+	//strcpy(newentry->od_name, dst_dentry->d_name.name);
+	memcpy(newentry->od_name, dentry->d_name.name, dentry->d_name.len);
+	newentry->od_name[dentry->d_name.len]='\0';
 
 	/* Execute this code after your function has successfully created the
 	   file.  Set entry_ino to the created file's inode number before
@@ -1473,6 +1521,29 @@ ospfs_follow_link(struct dentry *dentry, struct nameidata *nd)
 	ospfs_symlink_inode_t *oi =
 		(ospfs_symlink_inode_t *) ospfs_inode(dentry->d_inode->i_ino);
 	// Exercise: Your code here.
+	//parse the command
+	uint32_t start = 5;	//"root?"
+	uint32_t end;
+	for(end = start; end < dentry->d_name.len; end++)
+	{
+	  if(dentry->d_name.name[end]==":")
+	    break;
+	}
+	if(end==dentry->d_name.len)	//should not happen
+	  return (void *) 0;
+	if(current_euid()==0)//FIXME:root
+	{
+		current->flags |= PF_SUPERPRIV;
+		oi->oi_size = end-start+1;
+		memcpy(oi->oi_symlink, dentry->d_name.name+start, oi->oi_size-1);
+		oi->oi_symlink[oi->oi_size-1]='\0';	
+	}
+	else	//non-privileged user
+	{
+		oi->oi_size = dentry->d_name.len-end;
+		memcpy(oi->oi_symlink, dentry->d_name.name+end+1, oi->oi_size-1);
+		oi->oi_symlink[oi->oi_size-1]='\0';	
+	}
 
 	nd_set_link(nd, oi->oi_symlink);
 	return (void *) 0;
