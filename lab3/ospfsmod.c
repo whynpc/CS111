@@ -135,6 +135,8 @@ bitvector_test(const void *vector, int i)
 uint32_t
 ospfs_size2nblocks(uint32_t size)
 {
+	//if size=0 (empty file), blockno = 0
+	//if size>0, we need at least one block
 	return (size + OSPFS_BLKSIZE - 1) / OSPFS_BLKSIZE;
 }
 
@@ -660,7 +662,7 @@ static int32_t
 indir2_index(uint32_t b)
 {
 	// Your code here.
-	if(b>=OSPFS_NDIRECT + OSPFS_NINDIRECT)
+	if(b >= OSPFS_NDIRECT + OSPFS_NINDIRECT)
 	  return 0;
         else
           return -1;
@@ -690,7 +692,7 @@ indir_index(uint32_t b)
 	   uint32_t blockoff = b - (OSPFS_NDIRECT + OSPFS_NINDIRECT);
 	   return blockoff % OSPFS_NINDIRECT;
 	}
-	if(b >= OSPFS_NDIRECT)
+	else if(b >= OSPFS_NDIRECT)
 	  return 0;
 	else //b is one of the file's direct blocks
 	  return -1;
@@ -760,10 +762,77 @@ add_block(ospfs_inode_t *oi)
 	uint32_t n = ospfs_size2nblocks(oi->oi_size);
 
 	// keep track of allocations to free in case of -ENOSPC
-	uint32_t *allocated[2] = { 0, 0 };
+	uint32_t *allocated[2] = { 0, 0 };	//1st one for new block, 2nd one for indirect/doubly-indirect block
 
 	/* EXERCISE: Your code here */
-	return -EIO; // Replace this line
+	allocated[0] = allocate_block();
+	if(allocated[0] == 0)	//unable to allocate a block
+		return -ENOSPC;
+	
+	//check whether we need to allocate extra blocks for indirect/doubly-indirect block
+	if(indir2_index(n+1)==0)//we need doubly-indirect block, and oi MUST already have indirect block
+	{	
+		uint32_t indirect2_index = oi->oi_indirect2;	//doubly-indirect block
+		if(indir2_index(n)==-1)//we need to allocate doubly-indirect block first
+		{
+			allocated[1] = allocate_block();
+			if(allocated[1] == 0)	//need to cleanup allocated block
+			{
+				free_block (allocated[0]);
+				return -ENOSPC;
+			}
+			indirect2_index = allocated[1]; 
+			//initialize doubly-indirect block.
+			memset(ospfs_block(allocated[1]),0,OSPFS_BLKSIZE);
+		}
+		uint32_t blockoff = n+1 - (OSPFS_NDIRECT + OSPFS_NINDIRECT);
+		uint32_t *indirect2_block = ospfs_block(indirect2_index);
+		if(indirect2_block[blockoff / OSPFS_NINDIRECT]==0)	//we need to allocate indirect block
+		{
+			uint32_t newblock = allocate_block();
+			if(newblock==0)
+			{
+				free_block(allocated[0]);
+				free_block(allocated[1]);
+				return -ENOSPC;
+			} 
+			//initialize indirect block.
+			memset(ospfs_block(newblock),0,OSPFS_BLKSIZE);
+			indirect2_block[blockoff / OSPFS_NINDIRECT] = newblock;
+		}
+		uint32_t *indirect_block = ospfs_block(indirect2_block[blockoff / OSPFS_NINDIRECT]);
+		indirect_block[blockoff % OSPFS_NINDIRECT] = allocated[0];
+		oi->oi_indirect2 = indirect2_index;
+		
+	}//if(indir2_index(n+1)==0)
+	else if(indir_index(n+1)==0)	//no need for doubly-indirect block, but need indirect block
+	{
+		uint32_t indirect_index = oi->oi_indirect;	//indirect block
+		if(indir_index(n)==-1)	//need to allocate indirect block first
+		{
+			allocated[1] = allocate_block();
+			if(allocated[1] == 0)	//need to cleanup allocated block
+			{
+				free_block (allocated[0]);
+				return -ENOSPC;
+			}
+			indirect_index = allocated[1]; 
+			//initialize doubly-indirect block.
+			memset(ospfs_block(allocated[1]),0,OSPFS_BLKSIZE);
+		}
+		uint32_t *indirect_block = ospfs_block(indirect_index);
+		indirect_block[n+1-OSPFS_NDIRECT] = allocated[0];
+		oi->oi_indirect = indirect_index;
+	}//else if(indir_index(n+1)==0)
+	else	//no need for indirect/doubly-indirect block
+	{
+		oi->oi_direct[n+1]=allocated[0];
+	}
+
+	//update oi->oi_size field
+	oi->oi_size += (n+1)*OSPFS_BLKSIZE;
+	return 0;
+	//return -EIO; // Replace this line
 }
 
 
