@@ -38,7 +38,7 @@ extern uint32_t ospfs_length;
 
 // A pointer to the superblock; see ospfs.h for details on the struct.
 static ospfs_super_t * const ospfs_super =
-	(ospfs_super_t *) &ospfs_data[OSPFS_BLKSIZE];
+	(ospfs_super_t *) &ospfs_data[OSPFS_BLKSIZE];	//Block 1 is superblock. So ospfs_data[OSPFS_BLKSIZE] is superblock
 
 static int change_size(ospfs_inode_t *oi, uint32_t want_size);
 static ospfs_direntry_t *find_direntry(ospfs_inode_t *dir_oi, const char *name, int namelen);
@@ -182,8 +182,9 @@ static inline uint32_t
 ospfs_inode_blockno(ospfs_inode_t *oi, uint32_t offset)
 {
 	uint32_t blockno = offset / OSPFS_BLKSIZE;
-	if (offset >= oi->oi_size || oi->oi_ftype == OSPFS_FTYPE_SYMLINK)
+	if (offset >= oi->oi_size || oi->oi_ftype == OSPFS_FTYPE_SYMLINK)//symbolic link is stored in inode, so blockno=0
 		return 0;
+	//The problem is complicated because we have indrect block
 	else if (blockno >= OSPFS_NDIRECT + OSPFS_NINDIRECT) {
 		uint32_t blockoff = blockno - (OSPFS_NDIRECT + OSPFS_NINDIRECT);
 		uint32_t *indirect2_block = ospfs_block(oi->oi_indirect2);
@@ -452,8 +453,13 @@ ospfs_dir_readdir(struct file *filp, void *dirent, filldir_t filldir)
 		 * the loop.  For now we do this all the time.
 		 *
 		 * EXERCISE: Your code here */
-		r = 1;		/* Fix me! */
-		break;		/* Fix me! */
+		//NOTE: f_pos is an offset into the directory's data, plus two.
+		if(f_pos>=dir_oi->oi_size+2)	//end of directory file
+		{
+			r = 1;		/* Fix me! */
+			break;		/* Fix me! */
+		}
+		
 
 		/* Get a pointer to the next entry (od) in the directory.
 		 * The file system interprets the contents of a
@@ -474,8 +480,38 @@ ospfs_dir_readdir(struct file *filp, void *dirent, filldir_t filldir)
 		 * your function should advance f_pos by the proper amount to
 		 * advance to the next directory entry.
 		 */
+		 /* EXERCISE: Your code here */
+		 od = ospfs_inode_data(dir_oi, f_pos-2);
+		 if(od->od_ino == 0)	//blank directory, ignore it
+			continue;
 
-		/* EXERCISE: Your code here */
+		 entry_oi = ospfs_inode(od->od_ino);
+		 if(entry_oi->oi_ftype == OSPFS_FTYPE_REG)//regular file
+		 {
+			ok_so_far = filldir(dirent, od->od_name, strlen(od->od_name), f_pos, od->od_ino, DT_REG);
+			if (ok_so_far >= 0)
+				f_pos+=entry_oi->oi_size;
+			else
+				break;
+		 }
+		 else if(entry_oi->oi_ftype == OSPFS_FTYPE_DIR)	//directory
+		 {
+			ok_so_far = filldir(dirent, od->od_name, strlen(od->od_name), f_pos, od->od_ino, DT_DIR);
+			if (ok_so_far >= 0)
+				f_pos+=entry_oi->oi_size;
+			else
+				break;
+		 }
+		 else if(entry_oi->oi_ftype == DT_LNK)	//symbolic link
+		 {
+			ok_so_far = filldir(dirent, od->od_name, strlen(od->od_name), f_pos, od->od_ino, DT_DIR);
+			if (ok_so_far >= 0)
+				f_pos+=entry_oi->oi_size;
+			else
+				break;
+		 }
+		
+		
 	}
 
 	// Save the file position and return!
@@ -553,7 +589,17 @@ static uint32_t
 allocate_block(void)
 {
 	/* EXERCISE: Your code here */
-	return 0;
+	//get bitmap, which is located at Block 2
+	void *bitmap = &ospfs_data[OSPFS_BLKSIZE*2];
+	uint32_t retval;
+	for(retval = 0; retval != ospfs_super->os_nblocks; retval ++)
+		if(bitvector_test(bitmap, retval))
+		{
+			bitvector_clear (bitmap, retval);
+			break;
+		}
+	return retval==ospfs_super->os_nblocks ? 0:retval;
+	//return 0;
 }
 
 
@@ -572,6 +618,12 @@ static void
 free_block(uint32_t blockno)
 {
 	/* EXERCISE: Your code here */
+	//FIXME: we haven't checked if blockno refers to an inode
+	if(blockno < ospfs_super->os_firstinob)	//these blocks should always be allocated
+		return;
+	//get bitmap, which is located at Block 2
+	void *bitmap = &ospfs_data[OSPFS_BLKSIZE*2];
+	bitvector_set (bitmap, blockno);	//if it is already free, this is still true
 }
 
 
@@ -608,7 +660,11 @@ static int32_t
 indir2_index(uint32_t b)
 {
 	// Your code here.
-	return -1;
+	if(b>=OSPFS_NDIRECT + OSPFS_NINDIRECT)
+	  return 0;
+        else
+          return -1;
+	//return -1;
 }
 
 
@@ -627,7 +683,17 @@ static int32_t
 indir_index(uint32_t b)
 {
 	// Your code here.
-	return -1;
+	if(b >= OSPFS_NDIRECT + OSPFS_NINDIRECT) //b is located under the file's first indirect block
+	{
+	   //calculate the offset of the relevant indirect block within the doubly indirect block
+	   //copied from ospfs_inode_blockno(). Is it correct?
+	   uint32_t blockoff = b - (OSPFS_NDIRECT + OSPFS_NINDIRECT);
+	   return blockoff % OSPFS_NINDIRECT;
+	}
+	if(b >= OSPFS_NDIRECT)
+	  return 0;
+	else //b is one of the file's direct blocks
+	  return -1;
 }
 
 
@@ -644,7 +710,15 @@ static int32_t
 direct_index(uint32_t b)
 {
 	// Your code here.
-	return -1;
+	if(b >= OSPFS_NDIRECT + OSPFS_NINDIRECT)	//doubly indirect block is used
+	{
+		uint32_t blockoff = b - (OSPFS_NDIRECT + OSPFS_NINDIRECT);
+		return blockoff % OSPFS_NINDIRECT;	
+	}
+	else if(b >= OSPFS_NDIRECT)	//in the 1st indirect block
+		return (b - OSPFS_NDIRECT);
+	else	//direct block
+		return b;
 }
 
 
