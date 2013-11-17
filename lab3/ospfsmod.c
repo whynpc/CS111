@@ -772,6 +772,11 @@ add_block(ospfs_inode_t *oi)
 	//check whether we need to allocate extra blocks for indirect/doubly-indirect block
 	if(indir2_index(n+1)==0)//we need doubly-indirect block, and oi MUST already have indirect block
 	{	
+		if(oi->oi_indirect==0)//indirect block should be there
+		{
+			free_block(allocated[0]);
+			return -EIO;
+		}
 		uint32_t indirect2_index = oi->oi_indirect2;	//doubly-indirect block
 		if(indir2_index(n)==-1)//we need to allocate doubly-indirect block first
 		{
@@ -785,7 +790,7 @@ add_block(ospfs_inode_t *oi)
 			//initialize doubly-indirect block.
 			memset(ospfs_block(allocated[1]),0,OSPFS_BLKSIZE);
 		}
-		uint32_t blockoff = n+1 - (OSPFS_NDIRECT + OSPFS_NINDIRECT);
+		uint32_t blockoff = n - (OSPFS_NDIRECT + OSPFS_NINDIRECT);
 		uint32_t *indirect2_block = ospfs_block(indirect2_index);
 		if(indirect2_block[blockoff / OSPFS_NINDIRECT]==0)	//we need to allocate indirect block
 		{
@@ -821,12 +826,12 @@ add_block(ospfs_inode_t *oi)
 			memset(ospfs_block(allocated[1]),0,OSPFS_BLKSIZE);
 		}
 		uint32_t *indirect_block = ospfs_block(indirect_index);
-		indirect_block[n+1-OSPFS_NDIRECT] = allocated[0];
+		indirect_block[n-OSPFS_NDIRECT] = allocated[0];
 		oi->oi_indirect = indirect_index;
 	}//else if(indir_index(n+1)==0)
 	else	//no need for indirect/doubly-indirect block
 	{
-		oi->oi_direct[n+1]=allocated[0];
+		oi->oi_direct[n]=allocated[0];
 	}
 
 	//update oi->oi_size field
@@ -863,9 +868,56 @@ remove_block(ospfs_inode_t *oi)
 {
 	// current number of blocks in file
 	uint32_t n = ospfs_size2nblocks(oi->oi_size);
+	if(n==0)	//no block to be freed
+	  //return -EIO; 
+	  return 0;
 
 	/* EXERCISE: Your code here */
-	return -EIO; // Replace this line
+	if(indir2_index(n)==0)	//the last block is in doubly-indirect block
+	{
+		if(oi->oi_indirect2==0) //unexpected error
+			return -EIO;
+		uint32_t blockoff = n-1 - (OSPFS_NDIRECT + OSPFS_NINDIRECT);
+		uint32_t *indirect2_block = ospfs_block(oi->oi_indirect2);
+		if(indirect2_block[blockoff / OSPFS_NINDIRECT] == 0) //unexpected error
+			return -EIO;
+		uint32_t *indirect_block = ospfs_block(indirect2_block[blockoff / OSPFS_NINDIRECT]);
+		free_block(indirect_block[blockoff % OSPFS_NINDIRECT]);
+		indirect_block[blockoff % OSPFS_NINDIRECT] = 0;
+		if(blockoff % OSPFS_NINDIRECT == 0)
+		{
+			//removed the last element in this indirect block, so the indirect block is not useful
+			free_block(indirect2_block[blockoff / OSPFS_NINDIRECT]);
+			indirect2_block[blockoff / OSPFS_NINDIRECT] = 0;
+		}
+		if(indir2_index(n-1)==-1)//no need for doubly-indirect block
+		{
+			free_block(oi->oi_indirect2);
+			oi->oi_indirect2 = 0;
+		}	
+	}
+	else if(indir_index(n)==0)	//the last block is in indirect block
+	{
+		if(oi->oi_indirect==0)	//unexpected error
+			return -EIO;
+		uint32_t *indirect_block = ospfs_block(oi->oi_indirect);
+		free_block (indirect_block[n-1-OSPFS_NDIRECT]);
+		indirect_block[n-1-OSPFS_NDIRECT] = 0;
+		if(indir_index(n-1)==-1)	//need to free indirect block
+		{
+			free_block(oi->oi_indirect);
+			oi->oi_indirect = 0;
+		}
+	}
+	else	//the last block is direct block
+	{
+		free_block (oi->oi_direct[n-1]);
+		oi->oi_direct[n-1] = 0;
+	}
+
+	oi->oi_size = (n-1)*OSPFS_BLKSIZE;
+
+	return 0;
 }
 
 
