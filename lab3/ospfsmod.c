@@ -1229,7 +1229,32 @@ create_blank_direntry(ospfs_inode_t *dir_oi)
 	//    entries and return one of them.
 
 	/* EXERCISE: Your code here. */
-	return ERR_PTR(-EINVAL); // Replace this line
+	int entry_off;
+	ospfs_direntry_t *od;
+	od = NULL; // silence compiler warning; entry_off indicates when !od
+	for (entry_off = 0; entry_off < dir_oi->oi_size;
+	     entry_off += OSPFS_DIRENTRY_SIZE) {
+		od = ospfs_inode_data(dir_oi, entry_off);
+		if (od->od_ino == 0)	//we find an empty entry!
+			break;
+	}
+
+	if (entry_off == dir_oi->oi_size) {
+		//create a new empty entry
+		int retval = change_size(dir_oi, dir_oi->oi_size+sizeof(ospfs_direntry_t));
+		if(retval<0)
+		  return ERR_PTR(retval);
+		//find the last block
+		uint32_t lastblockno = ospfs_inode_blockno (dir_oi, dir_oi->oi_size);
+		od = (ospfs_direntry_t*)ospfs_block(lastblockno);
+		return od;
+	}
+	else {	//an available empty entry
+		return od;
+	}
+
+	//return 0;
+	//return ERR_PTR(-EINVAL); // Replace this line
 }
 
 // ospfs_link(src_dentry, dir, dst_dentry
@@ -1264,6 +1289,30 @@ create_blank_direntry(ospfs_inode_t *dir_oi)
 static int
 ospfs_link(struct dentry *src_dentry, struct inode *dir, struct dentry *dst_dentry) {
 	/* EXERCISE: Your code here. */
+	if(dst_dentry->d_name.len>OSPFS_MAXNAMELEN)
+	  return -ENAMETOOLONG;
+
+	ospfs_inode_t *od = ospfs_inode(dir->i_ino);
+
+	ospfs_direntry_t *entry = find_direntry(od, dst_dentry->d_name.name, dst_dentry->d_name.len);
+	if(entry != NULL)//already exists
+	  return -EEXIST;
+
+	//create new directory entry for dir
+	ospfs_direntry_t *newentry = create_blank_direntry(od);
+	if(IS_ERR(newentry))
+	  return PTR_ERR(newentry);
+
+	newentry->od_ino = src_dentry->d_inode->i_ino;
+	strcpy(newentry->od_name, dst_dentry->d_name.name);
+
+	//copy inode number
+	dst_dentry->d_inode->i_ino = src_dentry->d_inode->i_ino;
+	//update inode count
+	ospfs_inode_t *oi = ospfs_inode(src_dentry->d_inode->i_ino);
+	oi->oi_nlink++;
+	
+
 	return -EINVAL;
 }
 
