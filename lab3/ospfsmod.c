@@ -1047,6 +1047,8 @@ ospfs_read(struct file *filp, char __user *buffer, size_t count, loff_t *f_pos)
 	// Make sure we don't read past the end of the file!
 	// Change 'count' so we never read past the end of the file.
 	/* EXERCISE: Your code here */
+	if(*f_pos+count > oi->oi_size)
+	  return -EIO;
 
 	// Copy the data to user block by block
 	while (amount < count && retval >= 0) {
@@ -1067,6 +1069,12 @@ ospfs_read(struct file *filp, char __user *buffer, size_t count, loff_t *f_pos)
 		// into user space.
 		// Use variable 'n' to track number of bytes moved.
 		/* EXERCISE: Your code here */
+		if(count-amount>=OSPFS_BLKSIZE)
+		  n = copy_to_user(buffer, data, OSPFS_BLKSIZE);
+		//n = memcpy(buffer, data, OSPFS_BLKSIZE);
+		else
+		  n = copy_to_user(buffer, data, count-amount);
+		//n = memcpy(buffer, data, count-amount);
 		retval = -EIO; // Replace these lines
 		goto done;
 
@@ -1107,10 +1115,14 @@ ospfs_write(struct file *filp, const char __user *buffer, size_t count, loff_t *
 	// Support files opened with the O_APPEND flag.  To detect O_APPEND,
 	// use struct file's f_flags field and the O_APPEND bit.
 	/* EXERCISE: Your code here */
+	if(!(filp->f_flags & O_APPEND))	//FIXME: is it correct?
+	  return -EIO;
 
 	// If the user is writing past the end of the file, change the file's
 	// size to accomodate the request.  (Use change_size().)
 	/* EXERCISE: Your code here */
+	if(*f_pos+count>oi->oi_size)
+	  change_size(oi, *f_pos+count);
 
 	// Copy data block by block
 	while (amount < count && retval >= 0) {
@@ -1130,6 +1142,13 @@ ospfs_write(struct file *filp, const char __user *buffer, size_t count, loff_t *
 		// read user space.
 		// Keep track of the number of bytes moved in 'n'.
 		/* EXERCISE: Your code here */
+		if(count-amount>=OSPFS_BLKSIZE)
+		  n = copy_from_user(data, buffer, OSPFS_BLKSIZE);
+		  //n = memcpy(data, buffer, OSPFS_BLKSIZE);
+		else
+		  n = copy_from_user(data, buffer, count-amount);
+ 		  //n = memcpy(data, buffer, count-amount);
+		  
 		retval = -EIO; // Replace these lines
 		goto done;
 
