@@ -646,7 +646,7 @@ free_block(uint32_t blockno)
 	//FIXME: we haven't checked if blockno refers to an inode
 	void *bitmap;
 	if(blockno < ospfs_super->os_firstinob //these blocks should always be allocated
-	&& blockno >= ospfs_super->os_nblocks)	
+	|| blockno >= ospfs_super->os_nblocks)	
 		return;
 	//get bitmap, which is located at Block 2
 	bitmap = &ospfs_data[OSPFS_BLKSIZE*2]; 
@@ -715,7 +715,7 @@ indir_index(uint32_t b)
 	   //calculate the offset of the relevant indirect block within the doubly indirect block
 	   //copied from ospfs_inode_blockno(). Is it correct?
 	   uint32_t blockoff = b - (OSPFS_NDIRECT + OSPFS_NINDIRECT);
-	   return blockoff % OSPFS_NINDIRECT;
+	   return blockoff / OSPFS_NINDIRECT;
 	}
 	else if(b > OSPFS_NDIRECT)
 	  return 0;
@@ -1009,7 +1009,7 @@ change_size(ospfs_inode_t *oi, uint32_t new_size)
 	int retval = 0;	//return value
 	while (ospfs_size2nblocks(oi->oi_size) < ospfs_size2nblocks(new_size)) {
 	        /* EXERCISE: Your code here */
-		uint32_t old_size = oi->oi_size;
+		//uint32_t old_size = oi->oi_size;
 		retval = add_block(oi); //if success, oi_size would be updated
 		if(retval<0)	
 		{
@@ -1514,11 +1514,12 @@ ospfs_create(struct inode *dir, struct dentry *dentry, int mode, struct nameidat
 	newentry->od_name[dentry->d_name.len]='\0';
 	newentry->od_ino = inodeno;
 
+	entry_ino = inodeno;
 	/* Execute this code after your function has successfully created the
 	   file.  Set entry_ino to the created file's inode number before
 	   getting here. */
 	{
-		entry_ino = inodeno;
+
 		struct inode *i = ospfs_mk_linux_inode(dir->i_sb, entry_ino);
 		if (!i)
 			return -ENOMEM;
@@ -1613,11 +1614,12 @@ ospfs_symlink(struct inode *dir, struct dentry *dentry, const char *symname)
 	memcpy(newentry->od_name, dentry->d_name.name, dentry->d_name.len);
 	newentry->od_name[dentry->d_name.len]='\0';
 
+	entry_ino = inodeno;
 	/* Execute this code after your function has successfully created the
 	   file.  Set entry_ino to the created file's inode number before
 	   getting here. */
 	{
-		entry_ino = inodeno;
+
 		struct inode *i = ospfs_mk_linux_inode(dir->i_sb, entry_ino);
 		if (!i)
 			return -ENOMEM;
