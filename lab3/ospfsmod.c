@@ -543,7 +543,7 @@ ospfs_dir_readdir(struct file *filp, void *dirent, filldir_t filldir)
 static int
 ospfs_unlink(struct inode *dirino, struct dentry *dentry)
 {
-	eprintk("ospfs_unlink: %s\n",dentry->d_name.name);
+	//eprintk("ospfs_unlink: %s\n",dentry->d_name.name);
 	ospfs_inode_t *oi = ospfs_inode(dentry->d_inode->i_ino);
 	ospfs_inode_t *dir_oi = ospfs_inode(dentry->d_parent->d_inode->i_ino);
 	int entry_off;
@@ -1016,6 +1016,7 @@ change_size(ospfs_inode_t *oi, uint32_t new_size)
 
 	/* EXERCISE: Make sure you update necessary file meta data
 	             and return the proper value. */
+	//eprintk("No block is added/removed! old_size=%d new_size=%d\n", oi->oi_size, new_size);
 	oi->oi_size = new_size;
 	return 0;
 	//return -EIO; // Replace this line
@@ -1214,7 +1215,7 @@ ospfs_write(struct file *filp, const char __user *buffer, size_t count, loff_t *
  		  //n = memcpy(data, buffer, count-amount);
 		  
 		}
-		//eprintk("ospfs_write: count=%d\n %s\n\n",count, data);  
+		//eprintk("ospfs_write: count=%d f_pos=%d\n %s\n\n",count, *f_pos, data);  
 		buffer += n;
 		amount += n;
 		*f_pos += n;
@@ -1429,7 +1430,7 @@ ospfs_link(struct dentry *src_dentry, struct inode *dir, struct dentry *dst_dent
 static int
 ospfs_create(struct inode *dir, struct dentry *dentry, int mode, struct nameidata *nd)
 {
-	eprintk("ospfs_create: %s\n",dentry->d_name.name);
+	//eprintk("ospfs_create: %s\n",dentry->d_name.name);
 	//ospfs_inode_t *dir_oi = ospfs_inode(dir->i_ino);
 	uint32_t entry_ino = 0;
 	ospfs_inode_t *od;
@@ -1470,7 +1471,7 @@ ospfs_create(struct inode *dir, struct dentry *dentry, int mode, struct nameidat
 	  return -ENOSPC;
 	}
 	
-	eprintk("inode=%d for %s\n",inodeno,dentry->d_name.name);
+	//eprintk("inode=%d for %s\n",inodeno,dentry->d_name.name);
 	//initialize the inode
 	freeinode -> oi_size = 0;
 	freeinode -> oi_ftype = OSPFS_FTYPE_REG;
@@ -1496,7 +1497,7 @@ ospfs_create(struct inode *dir, struct dentry *dentry, int mode, struct nameidat
 	   file.  Set entry_ino to the created file's inode number before
 	   getting here. */
 	{
-		struct inode *i = ospfs_mk_linux_inode(dir->i_sb, entry_ino);
+		struct inode *i = ospfs_mk_linux_inode(dir->i_sb, inodeno);
 		if (!i)
 			return -ENOMEM;
 		d_instantiate(dentry, i);
@@ -1584,7 +1585,7 @@ ospfs_symlink(struct inode *dir, struct dentry *dentry, const char *symname)
 	   file.  Set entry_ino to the created file's inode number before
 	   getting here. */
 	{
-		struct inode *i = ospfs_mk_linux_inode(dir->i_sb, entry_ino);
+		struct inode *i = ospfs_mk_linux_inode(dir->i_sb, inodeno);
 		if (!i)
 			return -ENOMEM;
 		d_instantiate(dentry, i);
