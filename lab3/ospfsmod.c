@@ -607,7 +607,7 @@ allocate_block(void)
 	void *bitmap = &ospfs_data[OSPFS_BLKSIZE*2];
 	void *block = NULL;
 	uint32_t retval;
-	for(retval = 0; retval != ospfs_super->os_nblocks; retval ++)
+	for(retval = 2; retval != ospfs_super->os_nblocks; retval ++)	//first 2 blocks should NOT be used
 		if(bitvector_test(bitmap, retval))
 		{
 			bitvector_clear (bitmap, retval);
@@ -777,6 +777,7 @@ direct_index(uint32_t b)
 static int
 add_block(ospfs_inode_t *oi)
 {
+	//eprintk("add_block\n");
 	// current number of blocks in file
 	uint32_t n = ospfs_size2nblocks(oi->oi_size);
 
@@ -786,11 +787,15 @@ add_block(ospfs_inode_t *oi)
 	/* EXERCISE: Your code here */
 	allocated[0] = allocate_block();
 	if(allocated[0] == 0)	//unable to allocate a block
+	{
+		//eprintk("unable to allocated a block?\n");
 		return -ENOSPC;
+	}
 	
 	//check whether we need to allocate extra blocks for indirect/doubly-indirect block
 	if(indir2_index(n+1)==0)//we need doubly-indirect block, and oi MUST already have indirect block
 	{	
+		//eprintk("doubly-indirect block\n");
 		uint32_t indirect2_index;
 		uint32_t blockoff;
 		uint32_t *indirect_block;
@@ -835,6 +840,7 @@ add_block(ospfs_inode_t *oi)
 	}//if(indir2_index(n+1)==0)
 	else if(indir_index(n+1)==0)	//no need for doubly-indirect block, but need indirect block
 	{
+		//eprintk("indirect block\n");
 		uint32_t indirect_index = oi->oi_indirect;	//indirect block
 		uint32_t *indirect_block;
 		if(indir_index(n)==-1)	//need to allocate indirect block first
@@ -856,6 +862,7 @@ add_block(ospfs_inode_t *oi)
 	else	//no need for indirect/doubly-indirect block
 	{
 		oi->oi_direct[n]=allocated[0];
+		//eprintk("oi->oi_direct[%d]=%d\n",n,allocated[0]);
 	}
 
 	//update oi->oi_size field
@@ -1190,6 +1197,7 @@ ospfs_write(struct file *filp, const char __user *buffer, size_t count, loff_t *
 		uint32_t n = 0;
 		char *data;
 		if (blockno == 0) {
+			//eprintk("ospfs_write: EIO here f_pos=%d ino=%d\n",*f_pos,filp->f_dentry->d_inode->i_ino);
 			retval = -EIO;
 			goto done;
 		}
@@ -1497,7 +1505,8 @@ ospfs_create(struct inode *dir, struct dentry *dentry, int mode, struct nameidat
 	   file.  Set entry_ino to the created file's inode number before
 	   getting here. */
 	{
-		struct inode *i = ospfs_mk_linux_inode(dir->i_sb, inodeno);
+		entry_ino = inodeno;
+		struct inode *i = ospfs_mk_linux_inode(dir->i_sb, entry_ino);
 		if (!i)
 			return -ENOMEM;
 		d_instantiate(dentry, i);
@@ -1585,7 +1594,8 @@ ospfs_symlink(struct inode *dir, struct dentry *dentry, const char *symname)
 	   file.  Set entry_ino to the created file's inode number before
 	   getting here. */
 	{
-		struct inode *i = ospfs_mk_linux_inode(dir->i_sb, inodeno);
+		entry_ino = inodeno;
+		struct inode *i = ospfs_mk_linux_inode(dir->i_sb, entry_ino);
 		if (!i)
 			return -ENOMEM;
 		d_instantiate(dentry, i);
