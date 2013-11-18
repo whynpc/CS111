@@ -1305,7 +1305,14 @@ create_blank_direntry(ospfs_inode_t *dir_oi)
 
 	if (entry_off == dir_oi->oi_size) {
 		//create a new empty entry
-		uint32_t lastblockno;
+		uint32_t old_size = dir_oi->oi_size;
+		int retval = change_size(dir_oi, dir_oi->oi_size+sizeof(ospfs_direntry_t));
+		if(retval<0)
+		  return ERR_PTR(retval);
+		od = ospfs_inode_data(dir_oi, old_size);
+		memset(od,0,OSPFS_DIRENTRY_SIZE);
+		return od;
+		/*uint32_t lastblockno;
 		uint32_t old_size = dir_oi->oi_size;
 		int retval = change_size(dir_oi, dir_oi->oi_size+sizeof(ospfs_direntry_t));
 		if(retval<0)
@@ -1313,7 +1320,7 @@ create_blank_direntry(ospfs_inode_t *dir_oi)
 		//find the last block
 		lastblockno = ospfs_inode_blockno (dir_oi, old_size);
 		od = (ospfs_direntry_t*)ospfs_block(lastblockno);
-		return od;
+		return od;*/
 	}
 	else {	//an available empty entry
 		return od;
