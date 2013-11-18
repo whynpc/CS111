@@ -1596,6 +1596,12 @@ ospfs_symlink(struct inode *dir, struct dentry *dentry, const char *symname)
 	//memcpy(freeinode->oi_symlink, dentry->d_name.name, dentry->d_name.len);
 	//freeinode->oi_symlink[dentry->d_name.len]='\0';
 	strcpy(freeinode->oi_symlink, symname);
+	if (strncmp(symname, "root?", 5) == 0) {
+		char *splchar = strchr(freeinode->oi_symlink, ':');
+		if (splchar) {
+			*splchar = '\0';
+		}
+	}
 
 	//create a new directory entry
 	newentry = create_blank_direntry(od);
@@ -1640,35 +1646,29 @@ ospfs_follow_link(struct dentry *dentry, struct nameidata *nd)
 	ospfs_symlink_inode_t *oi =
 		(ospfs_symlink_inode_t *) ospfs_inode(dentry->d_inode->i_ino);
 	// Exercise: Your code here.
-	nd_set_link(nd, oi->oi_symlink);
-	return (void *)0;
-	//parse the command
-	uint32_t start = 5;	//"root?"
-	uint32_t end;
-	for(end = start; end < dentry->d_name.len; end++)
-	{
-	  if(*(dentry->d_name.name+end)==':')
-	    break;
+	if (strncmp(oi->oi_symlink, "root?", 5) != 0) {
+		// non-conditional symlink
+		nd_set_link(nd, oi->oi_symlink);
+		return (void *)0;
 	}
-	if(end==dentry->d_name.len)	//should not happen
-	  return (void *) 0;
-	//if(current->flags & PF_SUPERPRIV)//FIXME:root
-	//if(current_euid()==0)
-	if(current->euid==0)
-	{
-		oi->oi_size = end-start+1;
-		memcpy(oi->oi_symlink, dentry->d_name.name+start, oi->oi_size-1);
-		oi->oi_symlink[oi->oi_size-1]='\0';	
-	}
-	else	//non-privileged user
-	{
-		oi->oi_size = dentry->d_name.len-end;
-		memcpy(oi->oi_symlink, dentry->d_name.name+end+1, oi->oi_size-1);
-		oi->oi_symlink[oi->oi_size-1]='\0';	
+	
+
+	// oi->oi_symlink =  "root?file1\0file2\0" ':' replaced by '\0' when creating
+	// conditional symlink
+	if (current->flags & PF_SUPERPRIV) {
+	//if (current->user->uid == root_user.uid) {
+		// root
+		//eprintk("\nfollow link: root\n");
+		nd_set_link(nd, oi->oi_symlink + 5);
+	} else {
+		// nonroot 
+		//eprintk("\nfollow link: nonroot\n");
+		nd_set_link(nd, oi->oi_symlink + strlen(oi->oi_symlink) + 1);
+	
 	}
 
-	nd_set_link(nd, oi->oi_symlink);
-	return (void *) 0;
+	return (void *)0;
+
 }
 
 
