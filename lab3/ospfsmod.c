@@ -1395,25 +1395,28 @@ ospfs_link(struct dentry *src_dentry, struct inode *dir, struct dentry *dst_dent
 	if(entry != NULL)//already exists
 	  return -EEXIST;
 
+
+	newentry = create_blank_direntry(od);
+	if (IS_ERR(newentry)) {
+		return PTR_ERR(newentry);
+	}
+	memcpy(newentry->od_name, dst_dentry->d_name.name, dst_dentry->d_name.len);
+	newentry->od_name[dst_dentry->d_name.len] = '\0';
+	newentry->od_ino = src_dentry->d_inode->i_ino;
+
+	
 	//copy inode number
-	dst_dentry->d_inode->i_ino = src_dentry->d_inode->i_ino;
+	//dst_dentry->d_inode->i_ino = src_dentry->d_inode->i_ino;
 	//update inode count
 	oi = ospfs_inode(src_dentry->d_inode->i_ino);
 	oi->oi_nlink++;
 
 	//create new directory entry for dir
-	newentry = create_blank_direntry(od);
-	if(IS_ERR(newentry))
-	  return PTR_ERR(newentry);
 
-	newentry->od_ino = src_dentry->d_inode->i_ino;
 	//strcpy(newentry->od_name, dst_dentry->d_name.name);
-	memcpy(newentry->od_name, dst_dentry->d_name.name, dst_dentry->d_name.len);
-	newentry->od_name[dst_dentry->d_name.len]='\0';
-
 	
 
-	return -EINVAL;
+	return 0;
 }
 
 // ospfs_create
