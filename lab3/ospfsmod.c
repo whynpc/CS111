@@ -1147,12 +1147,13 @@ ospfs_write(struct file *filp, const char __user *buffer, size_t count, loff_t *
 	ospfs_inode_t *oi = ospfs_inode(filp->f_dentry->d_inode->i_ino);
 	int retval = 0;
 	size_t amount = 0;
-
 	// Support files opened with the O_APPEND flag.  To detect O_APPEND,
 	// use struct file's f_flags field and the O_APPEND bit.
 	/* EXERCISE: Your code here */
-	if(!(filp->f_flags & O_APPEND))	//FIXME: is it correct?
-	  return -EIO;
+	if((filp->f_flags & O_APPEND))	//FIXME: is it correct?
+	{
+	  *f_pos = oi->oi_size;
+	}
 
 	// If the user is writing past the end of the file, change the file's
 	// size to accomodate the request.  (Use change_size().)
@@ -1163,9 +1164,8 @@ ospfs_write(struct file *filp, const char __user *buffer, size_t count, loff_t *
 	// Copy data block by block
 	while (amount < count && retval >= 0) {
 		uint32_t blockno = ospfs_inode_blockno(oi, *f_pos);
-		uint32_t n;
+		uint32_t n = 0;
 		char *data;
-
 		if (blockno == 0) {
 			retval = -EIO;
 			goto done;
@@ -1179,15 +1179,19 @@ ospfs_write(struct file *filp, const char __user *buffer, size_t count, loff_t *
 		// Keep track of the number of bytes moved in 'n'.
 		/* EXERCISE: Your code here */
 		if(count-amount>=OSPFS_BLKSIZE)
-		  n = copy_from_user(data, buffer, OSPFS_BLKSIZE);
+		{
+		  if(copy_from_user(data+*f_pos, buffer, OSPFS_BLKSIZE)==0)
+		    n = OSPFS_BLKSIZE;
 		  //n = memcpy(data, buffer, OSPFS_BLKSIZE);
+		}
 		else
-		  n = copy_from_user(data, buffer, count-amount);
+		{
+		  if(copy_from_user(data+*f_pos, buffer, count-amount)==0)
+		    n = count-amount;
+		  eprintk("write count=%d amount=%d n=%d data=%s\n",count,amount,n,data);
  		  //n = memcpy(data, buffer, count-amount);
+		}
 		  
-		retval = -EIO; // Replace these lines
-		goto done;
-
 		buffer += n;
 		amount += n;
 		*f_pos += n;
