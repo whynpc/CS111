@@ -383,7 +383,7 @@ ospfs_dir_lookup(struct inode *dir, struct dentry *dentry, struct nameidata *ign
 	// We return a dentry whether or not the file existed.
 	// The file exists if and only if 'entry_inode != NULL'.
 	// If the file doesn't exist, the dentry is called a "negative dentry".
-
+	
 	// d_splice_alias() attaches the inode to the dentry.
 	// If it returns a new dentry, we need to set its operations.
 	if ((dentry = d_splice_alias(entry_inode, dentry)))
@@ -543,6 +543,7 @@ ospfs_dir_readdir(struct file *filp, void *dirent, filldir_t filldir)
 static int
 ospfs_unlink(struct inode *dirino, struct dentry *dentry)
 {
+	eprintk("ospfs_unlink: %s\n",dentry->d_name.name);
 	ospfs_inode_t *oi = ospfs_inode(dentry->d_inode->i_ino);
 	ospfs_inode_t *dir_oi = ospfs_inode(dentry->d_parent->d_inode->i_ino);
 	int entry_off;
@@ -604,13 +605,18 @@ allocate_block(void)
 	/* EXERCISE: Your code here */
 	//get bitmap, which is located at Block 2
 	void *bitmap = &ospfs_data[OSPFS_BLKSIZE*2];
+	void *block = NULL;
 	uint32_t retval;
 	for(retval = 0; retval != ospfs_super->os_nblocks; retval ++)
 		if(bitvector_test(bitmap, retval))
 		{
 			bitvector_clear (bitmap, retval);
+			//initialize the block
+			block = ospfs_block(retval);
+			memset(block,0,OSPFS_BLKSIZE);
 			break;
 		}
+	
 	return retval==ospfs_super->os_nblocks ? 0:retval;
 	//return 0;
 }
@@ -1127,6 +1133,7 @@ ospfs_read(struct file *filp, char __user *buffer, size_t count, loff_t *f_pos)
 		buffer += n;
 		amount += n;
 		*f_pos += n;
+		//eprintk("ospfs_read: count=%d buffer=%s\n data=%s\n",count, buffer,data);
 	}
 
     done:
@@ -1205,11 +1212,13 @@ ospfs_write(struct file *filp, const char __user *buffer, size_t count, loff_t *
 		    n = count-amount;
 		  //eprintk("write count=%d amount=%d n=%d data=%s\n",count,amount,n,data);
  		  //n = memcpy(data, buffer, count-amount);
-		}
 		  
+		}
+		//eprintk("ospfs_write: count=%d\n %s\n\n",count, data);  
 		buffer += n;
 		amount += n;
 		*f_pos += n;
+		
 	}
 
     done:
@@ -1297,11 +1306,12 @@ create_blank_direntry(ospfs_inode_t *dir_oi)
 	if (entry_off == dir_oi->oi_size) {
 		//create a new empty entry
 		uint32_t lastblockno;
+		uint32_t old_size = dir_oi->oi_size;
 		int retval = change_size(dir_oi, dir_oi->oi_size+sizeof(ospfs_direntry_t));
 		if(retval<0)
 		  return ERR_PTR(retval);
 		//find the last block
-		lastblockno = ospfs_inode_blockno (dir_oi, dir_oi->oi_size);
+		lastblockno = ospfs_inode_blockno (dir_oi, old_size);
 		od = (ospfs_direntry_t*)ospfs_block(lastblockno);
 		return od;
 	}
@@ -1412,6 +1422,7 @@ ospfs_link(struct dentry *src_dentry, struct inode *dir, struct dentry *dst_dent
 static int
 ospfs_create(struct inode *dir, struct dentry *dentry, int mode, struct nameidata *nd)
 {
+	eprintk("ospfs_create: %s\n",dentry->d_name.name);
 	//ospfs_inode_t *dir_oi = ospfs_inode(dir->i_ino);
 	uint32_t entry_ino = 0;
 	ospfs_inode_t *od;
@@ -1422,18 +1433,21 @@ ospfs_create(struct inode *dir, struct dentry *dentry, int mode, struct nameidat
 	/* EXERCISE: Your code here. */
 	//return -EINVAL; // Replace this line
 	if(dentry->d_name.len>OSPFS_MAXNAMELEN)
+	{
 	  return -ENAMETOOLONG;
+	}
 
 	od = ospfs_inode(dir->i_ino);
 	if(od == NULL)
 	{
-	  //eprintk("Segment fault here\n");
 	  return -EIO;
 	}
 
 	entry = find_direntry(od, dentry->d_name.name, dentry->d_name.len);
 	if(entry != NULL)//already exists
+	{
 	  return -EEXIST;
+	}
 
 	//FIXME:finish step 2 and step 3
 	//Find an empty inode
@@ -1445,10 +1459,11 @@ ospfs_create(struct inode *dir, struct dentry *dentry, int mode, struct nameidat
 			break;
 	}
 	if(inodeno == ospfs_super->os_ninodes)//no available inode
+	{
 	  return -ENOSPC;
+	}
 	
-	//dentry->d_inode->i_ino = inodeno + ospfs_super->os_firstinob;	//seems unnecessary according to comments?
-	//dentry->d_inode->i_ino = inodeno;
+	eprintk("inode=%d for %s\n",inodeno,dentry->d_name.name);
 	//initialize the inode
 	freeinode -> oi_size = 0;
 	freeinode -> oi_ftype = OSPFS_FTYPE_REG;
@@ -1462,15 +1477,13 @@ ospfs_create(struct inode *dir, struct dentry *dentry, int mode, struct nameidat
 	//create a new directory entry
 	newentry = create_blank_direntry(od);
 	if(IS_ERR(newentry))
+	{
 	  return PTR_ERR(newentry);
+	}
 
-	//newentry->od_ino = inodeno + ospfs_super->os_firstinob;
-	newentry->od_ino = inodeno;
-	//strcpy(newentry->od_name, dst_dentry->d_name.name);
 	memcpy(newentry->od_name, dentry->d_name.name, dentry->d_name.len);
 	newentry->od_name[dentry->d_name.len]='\0';
-
-
+	newentry->od_ino = inodeno;
 
 	/* Execute this code after your function has successfully created the
 	   file.  Set entry_ino to the created file's inode number before
