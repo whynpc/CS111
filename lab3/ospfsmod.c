@@ -633,7 +633,8 @@ free_block(uint32_t blockno)
 	/* EXERCISE: Your code here */
 	//FIXME: we haven't checked if blockno refers to an inode
 	void *bitmap;
-	if(blockno < ospfs_super->os_firstinob)	//these blocks should always be allocated
+	if(blockno < ospfs_super->os_firstinob //these blocks should always be allocated
+	&& blockno >= ospfs_super->os_nblocks)	
 		return;
 	//get bitmap, which is located at Block 2
 	bitmap = &ospfs_data[OSPFS_BLKSIZE*2]; 
@@ -983,24 +984,33 @@ change_size(ospfs_inode_t *oi, uint32_t new_size)
 {
 	//uint32_t old_size = oi->oi_size;
 	int retval = 0;	//return value
-
+	//eprintk("old_size=%d new_size=%d\n",oi->oi_size, new_size);
 	while (ospfs_size2nblocks(oi->oi_size) < ospfs_size2nblocks(new_size)) {
 	        /* EXERCISE: Your code here */
 		retval = add_block(oi); //if success, oi_size would be updated
 		if(retval<0)	//add_block would not change oi_size
+		{
+		  oi->oi_size = new_size;
+		  //eprintk("Increase block s.t. oi->oi_size=%d\n",oi->oi_size);
 		  return retval;
+		}
 		//return -EIO; // Replace this line
 	}
 	while (ospfs_size2nblocks(oi->oi_size) > ospfs_size2nblocks(new_size)) {
 	        /* EXERCISE: Your code here */
 		retval = remove_block(oi); //if success, oi_size would be updated
 		if(retval<0)    //remove_block would not change oi_size
+		{
+		  oi->oi_size = new_size;
+   		  //eprintk("Decrease block s.t. oi->oi_size=%d\n",oi->oi_size);
 		  return retval;
+		}
 		//return -EIO; // Replace this line
 	}
 
 	/* EXERCISE: Make sure you update necessary file meta data
 	             and return the proper value. */
+	oi->oi_size = new_size;
 	return 0;
 	//return -EIO; // Replace this line
 }
@@ -1159,7 +1169,12 @@ ospfs_write(struct file *filp, const char __user *buffer, size_t count, loff_t *
 	// size to accomodate the request.  (Use change_size().)
 	/* EXERCISE: Your code here */
 	if(*f_pos+count>oi->oi_size)
+	{
+	  //eprintk("ospfs_write calls change_size\n");
 	  change_size(oi, *f_pos+count);
+	  //eprintk("ospfs_write finishes change_size\n");
+	  
+	}
 
 	// Copy data block by block
 	while (amount < count && retval >= 0) {
@@ -1188,7 +1203,7 @@ ospfs_write(struct file *filp, const char __user *buffer, size_t count, loff_t *
 		{
 		  if(copy_from_user(data+*f_pos, buffer, count-amount)==0)
 		    n = count-amount;
-		  eprintk("write count=%d amount=%d n=%d data=%s\n",count,amount,n,data);
+		  //eprintk("write count=%d amount=%d n=%d data=%s\n",count,amount,n,data);
  		  //n = memcpy(data, buffer, count-amount);
 		}
 		  
