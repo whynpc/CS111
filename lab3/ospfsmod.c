@@ -456,7 +456,7 @@ ospfs_dir_readdir(struct file *filp, void *dirent, filldir_t filldir)
 		 *
 		 * EXERCISE: Your code here */
 		//NOTE: f_pos is an offset into the directory's data, plus two.
-		if(f_pos>=dir_oi->oi_size+2)	//end of directory file
+		if((f_pos-2)*sizeof(ospfs_direntry_t)>dir_oi->oi_size)	//end of directory file
 		{
 			r = 1;		/* Fix me! */
 			break;		/* Fix me! */
@@ -483,16 +483,20 @@ ospfs_dir_readdir(struct file *filp, void *dirent, filldir_t filldir)
 		 * advance to the next directory entry.
 		 */
 		 /* EXERCISE: Your code here */
-		 od = ospfs_inode_data(dir_oi, f_pos-2);
+		 od = ospfs_inode_data(dir_oi, (f_pos-2)*sizeof(ospfs_direntry_t));
 		 if(od->od_ino == 0)	//blank directory, ignore it
+		 {
+			f_pos++;
 			continue;
+		 }
 
 		 entry_oi = ospfs_inode(od->od_ino);
 		 if(entry_oi->oi_ftype == OSPFS_FTYPE_REG)//regular file
 		 {
 			ok_so_far = filldir(dirent, od->od_name, strlen(od->od_name), f_pos, od->od_ino, DT_REG);
 			if (ok_so_far >= 0)
-				f_pos+=entry_oi->oi_size;
+				//f_pos+=entry_oi->oi_size;
+				f_pos++;
 			else
 				break;
 		 }
@@ -500,15 +504,17 @@ ospfs_dir_readdir(struct file *filp, void *dirent, filldir_t filldir)
 		 {
 			ok_so_far = filldir(dirent, od->od_name, strlen(od->od_name), f_pos, od->od_ino, DT_DIR);
 			if (ok_so_far >= 0)
-				f_pos+=entry_oi->oi_size;
+				//f_pos+=entry_oi->oi_size;
+				f_pos++;
 			else
 				break;
 		 }
-		 else if(entry_oi->oi_ftype == DT_LNK)	//symbolic link
+		 else if(entry_oi->oi_ftype == OSPFS_FTYPE_SYMLINK)	//symbolic link
 		 {
-			ok_so_far = filldir(dirent, od->od_name, strlen(od->od_name), f_pos, od->od_ino, DT_DIR);
+			ok_so_far = filldir(dirent, od->od_name, strlen(od->od_name), f_pos, od->od_ino, DT_LNK);
 			if (ok_so_far >= 0)
-				f_pos+=entry_oi->oi_size;
+				//f_pos+=entry_oi->oi_size;
+				f_pos++;
 			else
 				break;
 		 }
@@ -1555,7 +1561,8 @@ ospfs_follow_link(struct dentry *dentry, struct nameidata *nd)
 	if(end==dentry->d_name.len)	//should not happen
 	  return (void *) 0;
 	//if(current->flags & PF_SUPERPRIV)//FIXME:root
-	if(current_euid()==0)
+	//if(current_euid()==0)
+	if(current->euid==0)
 	{
 		oi->oi_size = end-start+1;
 		memcpy(oi->oi_symlink, dentry->d_name.name+start, oi->oi_size-1);
