@@ -1561,6 +1561,9 @@ ospfs_symlink(struct inode *dir, struct dentry *dentry, const char *symname)
 	ospfs_symlink_inode_t *freeinode;
 	ospfs_direntry_t *newentry;
 
+
+	//eprintk("Symlink: symname=%s, dentryname=%s\n", symname, dentry->d_name.name);
+
 	/* EXERCISE: Your code here. */
 	//   1. Check for the -EEXIST error and find an empty directory entry using the
 	//	helper functions above.
@@ -1587,11 +1590,12 @@ ospfs_symlink(struct inode *dir, struct dentry *dentry, const char *symname)
 	//dentry->d_inode->i_ino = inodeno;	//seems unnecessary according to comments?
 
 	//initialize the inode
-	freeinode -> oi_size = dentry->d_name.len+1;	//including '\0'
+	freeinode -> oi_size = strlen(symname) + 1;	//including '\0'
 	freeinode -> oi_ftype = OSPFS_FTYPE_SYMLINK;
 	freeinode -> oi_nlink = 1;
-	memcpy(freeinode->oi_symlink, dentry->d_name.name, dentry->d_name.len);
-	freeinode->oi_symlink[dentry->d_name.len]='\0';
+	//memcpy(freeinode->oi_symlink, dentry->d_name.name, dentry->d_name.len);
+	//freeinode->oi_symlink[dentry->d_name.len]='\0';
+	strcpy(freeinode->oi_symlink, symname);
 
 	//create a new directory entry
 	newentry = create_blank_direntry(od);
@@ -1636,6 +1640,8 @@ ospfs_follow_link(struct dentry *dentry, struct nameidata *nd)
 	ospfs_symlink_inode_t *oi =
 		(ospfs_symlink_inode_t *) ospfs_inode(dentry->d_inode->i_ino);
 	// Exercise: Your code here.
+	nd_set_link(nd, oi->oi_symlink);
+	return (void *)0;
 	//parse the command
 	uint32_t start = 5;	//"root?"
 	uint32_t end;
