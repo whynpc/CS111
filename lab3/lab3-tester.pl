@@ -85,6 +85,11 @@ close FOO;
     [ 'yes | head -n 5632 > test/yes.txt && ls -l test/yes.txt | awk \'{ print $5 }\'',
       '11264'
     ],
+
+    # make a larger file for doubly-indirect blocks
+    [ 'yes | head -n 600000 > test/yes.txt && ls -l test/yes.txt | awk \'{ print $5 }\'',
+      '1200000'
+    ],
    
     # truncate the large file
     [ 'echo truncernated11 > test/yes.txt | ls -l test/yes.txt | awk \'{ print $5 }\' ; rm test/yes.txt',

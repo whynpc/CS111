@@ -801,7 +801,7 @@ add_block(ospfs_inode_t *oi)
 	//check whether we need to allocate extra blocks for indirect/doubly-indirect block
 	if(indir2_index(n+1)==0)//we need doubly-indirect block, and oi MUST already have indirect block
 	{	
-		//eprintk("doubly-indirect block\n");
+		//eprintk("we need doubly-indirect block\n");
 		uint32_t indirect2_index;
 		uint32_t blockoff;
 		uint32_t *indirect_block;
@@ -1603,16 +1603,17 @@ ospfs_symlink(struct inode *dir, struct dentry *dentry, const char *symname)
 			*splchar = '\0';
 		}
 	}
+	eprintk("symname=%s\n",symname);
 
 	//create a new directory entry
 	newentry = create_blank_direntry(od);
 	if(IS_ERR(newentry))
 	  return PTR_ERR(newentry);
 
-	newentry->od_ino = inodeno;
 	//strcpy(newentry->od_name, dst_dentry->d_name.name);
 	memcpy(newentry->od_name, dentry->d_name.name, dentry->d_name.len);
 	newentry->od_name[dentry->d_name.len]='\0';
+	newentry->od_ino = inodeno;
 
 	entry_ino = inodeno;
 	/* Execute this code after your function has successfully created the
