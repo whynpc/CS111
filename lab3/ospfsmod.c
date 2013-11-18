@@ -1092,7 +1092,17 @@ ospfs_read(struct file *filp, char __user *buffer, size_t count, loff_t *f_pos)
 		// into user space.
 		// Use variable 'n' to track number of bytes moved.
 		/* EXERCISE: Your code here */
-		if(count-amount>=OSPFS_BLKSIZE)
+		data = ospfs_inode_data(oi, *f_pos);
+		n = OSPFS_BLKSIZE - ((*f_pos) % OSPFS_BLKSIZE);
+		n = (n > count - amount) ? count - amount : n;
+		if (copy_to_user(buffer, data, n) == 0) {
+			//  do nothing
+		} else {
+			retval = -EIO;
+			goto done;
+		}
+
+		/*if(count-amount>=OSPFS_BLKSIZE)
 		{
 		  if(copy_to_user(buffer, data, OSPFS_BLKSIZE)==0)
 			n = OSPFS_BLKSIZE;
@@ -1102,7 +1112,7 @@ ospfs_read(struct file *filp, char __user *buffer, size_t count, loff_t *f_pos)
 		{
 		  if(copy_to_user(buffer, data, count-amount)==0)
 			n = count-amount;
-		}
+		}*/
 
 		buffer += n;
 		amount += n;
