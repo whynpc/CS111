@@ -185,18 +185,24 @@ ospfs_inode_blockno(ospfs_inode_t *oi, uint32_t offset)
 {
 	uint32_t blockno = offset / OSPFS_BLKSIZE;
 	if (offset >= oi->oi_size || oi->oi_ftype == OSPFS_FTYPE_SYMLINK)//symbolic link is stored in inode, so blockno=0
+	{
 		return 0;
+	}
 	//The problem is complicated because we have indrect block
 	else if (blockno >= OSPFS_NDIRECT + OSPFS_NINDIRECT) {
+		//eprintk("doubly-indirect block\n");
 		uint32_t blockoff = blockno - (OSPFS_NDIRECT + OSPFS_NINDIRECT);
 		uint32_t *indirect2_block = ospfs_block(oi->oi_indirect2);
 		uint32_t *indirect_block = ospfs_block(indirect2_block[blockoff / OSPFS_NINDIRECT]);
 		return indirect_block[blockoff % OSPFS_NINDIRECT];
 	} else if (blockno >= OSPFS_NDIRECT) {
+		//eprintk("indirect block\n");
 		uint32_t *indirect_block = ospfs_block(oi->oi_indirect);
 		return indirect_block[blockno - OSPFS_NDIRECT];
-	} else
+	} else{
+		//eprintk("indirect block\n");
 		return oi->oi_direct[blockno];
+	}
 }
 
 
@@ -681,7 +687,7 @@ static int32_t
 indir2_index(uint32_t b)
 {
 	// Your code here.
-	if(b >= OSPFS_NDIRECT + OSPFS_NINDIRECT)
+	if(b > OSPFS_NDIRECT + OSPFS_NINDIRECT)
 	  return 0;
         else
           return -1;
@@ -704,14 +710,14 @@ static int32_t
 indir_index(uint32_t b)
 {
 	// Your code here.
-	if(b >= OSPFS_NDIRECT + OSPFS_NINDIRECT) //b is located under the file's first indirect block
+	if(b > OSPFS_NDIRECT + OSPFS_NINDIRECT) //b is located under the file's first indirect block
 	{
 	   //calculate the offset of the relevant indirect block within the doubly indirect block
 	   //copied from ospfs_inode_blockno(). Is it correct?
 	   uint32_t blockoff = b - (OSPFS_NDIRECT + OSPFS_NINDIRECT);
 	   return blockoff % OSPFS_NINDIRECT;
 	}
-	else if(b >= OSPFS_NDIRECT)
+	else if(b > OSPFS_NDIRECT)
 	  return 0;
 	else //b is one of the file's direct blocks
 	  return -1;
@@ -803,6 +809,7 @@ add_block(ospfs_inode_t *oi)
 		if(oi->oi_indirect==0)//indirect block should be there
 		{
 			free_block(allocated[0]);
+			//eprintk("no indirect block?\n");
 			return -EIO;
 		}
 		indirect2_index = oi->oi_indirect2;	//doubly-indirect block
@@ -812,6 +819,7 @@ add_block(ospfs_inode_t *oi)
 			if(allocated[1] == 0)	//need to cleanup allocated block
 			{
 				free_block (allocated[0]);
+				//eprintk("cannot allocate doubly-indirect block?\n");
 				return -ENOSPC;
 			}
 			indirect2_index = allocated[1]; 
@@ -825,6 +833,7 @@ add_block(ospfs_inode_t *oi)
 			uint32_t newblock = allocate_block();
 			if(newblock==0)
 			{
+				//eprintk("cannot allocate indirect block within doubly-indirect block?\n");
 				free_block(allocated[0]);
 				free_block(allocated[1]);
 				return -ENOSPC;
@@ -840,7 +849,7 @@ add_block(ospfs_inode_t *oi)
 	}//if(indir2_index(n+1)==0)
 	else if(indir_index(n+1)==0)	//no need for doubly-indirect block, but need indirect block
 	{
-		//eprintk("indirect block\n");
+		//eprintk("We need indirect-block\n");
 		uint32_t indirect_index = oi->oi_indirect;	//indirect block
 		uint32_t *indirect_block;
 		if(indir_index(n)==-1)	//need to allocate indirect block first
@@ -848,6 +857,7 @@ add_block(ospfs_inode_t *oi)
 			allocated[1] = allocate_block();
 			if(allocated[1] == 0)	//need to cleanup allocated block
 			{
+				//eprintk("cannot allocate indirect block?\n");
 				free_block (allocated[0]);
 				return -ENOSPC;
 			}
@@ -866,7 +876,7 @@ add_block(ospfs_inode_t *oi)
 	}
 
 	//update oi->oi_size field
-	oi->oi_size += (n+1)*OSPFS_BLKSIZE;
+	oi->oi_size = (n+1)*OSPFS_BLKSIZE;
 	return 0;
 	//return -EIO; // Replace this line
 }
@@ -997,11 +1007,11 @@ change_size(ospfs_inode_t *oi, uint32_t new_size)
 {
 	//uint32_t old_size = oi->oi_size;
 	int retval = 0;	//return value
-	//eprintk("old_size=%d new_size=%d\n",oi->oi_size, new_size);
 	while (ospfs_size2nblocks(oi->oi_size) < ospfs_size2nblocks(new_size)) {
 	        /* EXERCISE: Your code here */
+		uint32_t old_size = oi->oi_size;
 		retval = add_block(oi); //if success, oi_size would be updated
-		if(retval<0)	//add_block would not change oi_size
+		if(retval<0)	
 		{
 		  oi->oi_size = new_size;
 		  //eprintk("Increase block s.t. oi->oi_size=%d\n",oi->oi_size);
