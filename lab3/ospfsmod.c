@@ -1425,6 +1425,11 @@ ospfs_create(struct inode *dir, struct dentry *dentry, int mode, struct nameidat
 	  return -ENAMETOOLONG;
 
 	od = ospfs_inode(dir->i_ino);
+	if(od == NULL)
+	{
+	  //eprintk("Segment fault here\n");
+	  return -EIO;
+	}
 
 	entry = find_direntry(od, dentry->d_name.name, dentry->d_name.len);
 	if(entry != NULL)//already exists
@@ -1434,14 +1439,16 @@ ospfs_create(struct inode *dir, struct dentry *dentry, int mode, struct nameidat
 	//Find an empty inode
 	for(inodeno = 0; inodeno != ospfs_super->os_ninodes; inodeno++)
 	{
-		freeinode = ospfs_inode(inodeno + ospfs_super->os_firstinob);
+		//freeinode = ospfs_inode(inodeno + ospfs_super->os_firstinob);
+		freeinode = ospfs_inode(inodeno);
 		if(freeinode->oi_nlink==0)
 			break;
 	}
 	if(inodeno == ospfs_super->os_ninodes)//no available inode
 	  return -ENOSPC;
-	dentry->d_inode->i_ino = inodeno + ospfs_super->os_firstinob;	//seems unnecessary according to comments?
-
+	
+	//dentry->d_inode->i_ino = inodeno + ospfs_super->os_firstinob;	//seems unnecessary according to comments?
+	//dentry->d_inode->i_ino = inodeno;
 	//initialize the inode
 	freeinode -> oi_size = 0;
 	freeinode -> oi_ftype = OSPFS_FTYPE_REG;
@@ -1457,7 +1464,8 @@ ospfs_create(struct inode *dir, struct dentry *dentry, int mode, struct nameidat
 	if(IS_ERR(newentry))
 	  return PTR_ERR(newentry);
 
-	newentry->od_ino = inodeno + ospfs_super->os_firstinob;
+	//newentry->od_ino = inodeno + ospfs_super->os_firstinob;
+	newentry->od_ino = inodeno;
 	//strcpy(newentry->od_name, dst_dentry->d_name.name);
 	memcpy(newentry->od_name, dentry->d_name.name, dentry->d_name.len);
 	newentry->od_name[dentry->d_name.len]='\0';
@@ -1527,13 +1535,13 @@ ospfs_symlink(struct inode *dir, struct dentry *dentry, const char *symname)
 	//Find an empty inode
 	for(inodeno = 0; inodeno != ospfs_super->os_ninodes; inodeno++)
 	{
-		freeinode = (ospfs_symlink_inode_t*)ospfs_inode(inodeno + ospfs_super->os_firstinob);
+		freeinode = (ospfs_symlink_inode_t*)ospfs_inode(inodeno);
 		if(freeinode->oi_nlink==0)
 			break;
 	}
 	if(inodeno == ospfs_super->os_ninodes)//no available inode
 	  return -ENOSPC;
-	dentry->d_inode->i_ino = inodeno + ospfs_super->os_firstinob;	//seems unnecessary according to comments?
+	//dentry->d_inode->i_ino = inodeno;	//seems unnecessary according to comments?
 
 	//initialize the inode
 	freeinode -> oi_size = dentry->d_name.len+1;	//including '\0'
@@ -1547,7 +1555,7 @@ ospfs_symlink(struct inode *dir, struct dentry *dentry, const char *symname)
 	if(IS_ERR(newentry))
 	  return PTR_ERR(newentry);
 
-	newentry->od_ino = inodeno + ospfs_super->os_firstinob;
+	newentry->od_ino = inodeno;
 	//strcpy(newentry->od_name, dst_dentry->d_name.name);
 	memcpy(newentry->od_name, dentry->d_name.name, dentry->d_name.len);
 	newentry->od_name[dentry->d_name.len]='\0';
