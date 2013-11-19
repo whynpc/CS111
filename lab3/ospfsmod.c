@@ -1258,21 +1258,14 @@ ospfs_write(struct file *filp, const char __user *buffer, size_t count, loff_t *
 		// read user space.
 		// Keep track of the number of bytes moved in 'n'.
 		/* EXERCISE: Your code here */
-		if(count-amount>=OSPFS_BLKSIZE)
-		{
-		  if(copy_from_user(data+*f_pos, buffer, OSPFS_BLKSIZE)==0)
-		    n = OSPFS_BLKSIZE;
-		  //n = memcpy(data, buffer, OSPFS_BLKSIZE);
+		data = ospfs_block(blockno) + (*f_pos) % OSPFS_BLKSIZE;
+		n = OSPFS_BLKSIZE - (*f_pos) % OSPFS_BLKSIZE;
+		n = n > count - amount ? count - amount : n;
+		if (copy_from_user(data, buffer, n) != 0) {
+			retval = -EIO;
+			goto done;		
 		}
-		else
-		{
-		  if(copy_from_user(data+*f_pos, buffer, count-amount)==0)
-		    n = count-amount;
-		  //eprintk("write count=%d amount=%d n=%d data=%s\n",count,amount,n,data);
- 		  //n = memcpy(data, buffer, count-amount);
-		  
-		}
-		//eprintk("ospfs_write: count=%d f_pos=%d\n %s\n\n",count, *f_pos, data);  
+
 		buffer += n;
 		amount += n;
 		*f_pos += n;
