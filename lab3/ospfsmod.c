@@ -577,6 +577,45 @@ ospfs_unlink(struct inode *dirino, struct dentry *dentry)
 		target->oi_nlink = 0;
 	od->od_ino = 0;
 	oi->oi_nlink--;
+	//if link count is equal to zero, free the block
+	if(oi->oi_nlink==0)
+	{
+		void *bitmap = &ospfs_data[OSPFS_BLKSIZE*2];
+		uint32_t blockno;
+		//free direct block
+		for(blockno = 0; blockno != OSPFS_NDIRECT; blockno++)
+		  if(oi->oi_direct[blockno]!=0 && !bitvector_test(bitmap, oi->oi_direct[blockno]))
+		    bitvector_set (bitmap, oi->oi_direct[blockno]);
+		//free indirect block
+		if(oi->oi_indirect!=0)
+		{
+  		  uint32_t *block = ospfs_block(oi->oi_indirect);
+		  for(blockno = 0; blockno != OSPFS_NINDIRECT; blockno++)
+		  {
+		      if(block[blockno]!=0 && !bitvector_test(bitmap, block[blockno]))
+		      	bitvector_set (bitmap, block[blockno]);
+		  }
+		  oi->oi_indirect = 0;
+		}
+		//free doubly-indirect block
+		if(oi->oi_indirect2!=0)
+		{
+		  uint32_t *doubly_block = ospfs_block(oi->oi_indirect2);
+		  uint32_t count = 0;
+		  while(doubly_block[count]!=0)
+		  {
+			uint32_t *block = ospfs_block(doubly_block[count]);
+			for(blockno = 0; blockno != OSPFS_NINDIRECT; blockno++)
+		  	{
+		      		if(block[blockno]!=0 && !bitvector_test(bitmap, block[blockno]))
+		      		bitvector_set (bitmap, block[blockno]);
+		  	}
+			doubly_block[count] = 0;
+			count++;
+		  }
+		  oi->oi_indirect2 = 0;
+		}
+	}
 	return 0;
 }
 
