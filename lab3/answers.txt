@@ -22,5 +22,5 @@ Email: hywang@cs.ucla.edu
 
 # Extra credit problems
 #Extra credit problem: none
-
+In ospfs_unlink(), we add some code such that when the link count is equal to 0, we would free used blocks. This seems to be a design loophole for the original implementation of ospfs_unlink().
 # Add any other information you'd like us to know below this line.
