@@ -173,9 +173,15 @@ taskbufresult_t read_to_taskbuf(int fd, task_t *t)
 
 	if (amt == -1 && (errno == EINTR || errno == EAGAIN
 			  || errno == EWOULDBLOCK))
+  {
+  	message("read_to_taskbuf: %s\n", strerror(errno));
 		return TBUF_AGAIN;
+	}
 	else if (amt == -1)
+	{
+		message("read_to_taskbuf: %s\n", strerror(errno));
 		return TBUF_ERROR;
+	}
 	else if (amt == 0)
 		return TBUF_END;
 	else {
@@ -203,9 +209,15 @@ taskbufresult_t write_from_taskbuf(int fd, task_t *t)
 
 	if (amt == -1 && (errno == EINTR || errno == EAGAIN
 			  || errno == EWOULDBLOCK))
+	{
+		message("write_from_taskbuf: %s\n", strerror(errno));
 		return TBUF_AGAIN;
+	}
 	else if (amt == -1)
+	{
+		message("write_from_taskbuf: %s\n", strerror(errno));
 		return TBUF_ERROR;
+	}
 	else if (amt == 0)
 		return TBUF_END;
 	else {
@@ -887,7 +899,7 @@ static void task_upload_parallel(task_t *listen_task)
 				
 			message("* Got connection from %s:%d\n",
 			inet_ntoa(peer_addr.sin_addr), ntohs(peer_addr.sin_port));
-
+			
 			tt = task_new(TASK_UPLOAD);
 			tt->peer_fd = fd;
 			t[ntask%MAXNPEER] = tt;
@@ -902,6 +914,7 @@ static void task_upload_parallel(task_t *listen_task)
 				{
 					//first read peer's request
 					ret = read_to_taskbuf(t[i]->peer_fd, t[i]);
+					
 					if (ret == TBUF_ERROR) {
 						error("* Cannot read from connection");
 						task_free(t[i]);
@@ -917,8 +930,20 @@ static void task_upload_parallel(task_t *listen_task)
 								error("* Odd request %.*s\n", t[i]->tail, t[i]->buf);
 								task_free(t[i]);
 								t[i] = NULL;
+								continue;
 						 }
 						 t[i]->head = t[i]->tail = 0;
+						 
+						 t[i]->disk_fd = open(t[i]->filename, O_RDONLY);
+						 
+						 if (t[i]->disk_fd == -1) {
+							 error("* Cannot open file %s", t[i]->filename);
+							 //goto exit;
+							 task_free(t[i]);
+							 t[i] = NULL;
+							 continue;
+						 }
+						 
 						 message("* Transferring file %s\n", t[i]->filename);
 						 while (1) {
 							ret = write_from_taskbuf(t[i]->peer_fd, t[i]);
