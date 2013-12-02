@@ -14,6 +14,7 @@
 #include <stdarg.h>
 #include <ctype.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <dirent.h>
 #include <netdb.h>
 #include <assert.h>
@@ -37,6 +38,8 @@ static int listen_port;
 
 #define TASKBUFSIZ	4096	// Size of task_t::buf
 #define FILENAMESIZ	256	// Size of task_t::filename
+#define MAXNFILE 4096	//maximum number of files to be downloaed
+#define MAXNPEER 4096	//maximum number of upload peers
 
 typedef enum tasktype {		// Which type of connection is this?
 	TASK_TRACKER,		// => Tracker connection
@@ -45,7 +48,7 @@ typedef enum tasktype {		// Which type of connection is this?
 	TASK_DOWNLOAD		// => Download request (from us to peer)
 } tasktype_t;
 
-typedef struct peer {		// A peer connection (TASK_DOWNLOAD)
+typedef struct peer {		// A peer connection (TASK_DOWNLOAD). This is a linked list
 	char alias[TASKBUFSIZ];	// => Peer's alias
 	struct in_addr addr;	// => Peer's IP address
 	int port;		// => Peer's port number
@@ -520,11 +523,13 @@ static void task_download(task_t *t, task_t *tracker_task)
 	message("* Connecting to %s:%d to download '%s'\n",
 		inet_ntoa(t->peer_list->addr), t->peer_list->port,
 		t->filename);
+	//socket here!
 	t->peer_fd = open_socket(t->peer_list->addr, t->peer_list->port);
 	if (t->peer_fd == -1) {
 		error("* Cannot connect to peer: %s\n", strerror(errno));
 		goto try_again;
 	}
+	//socket here!
 	osp2p_writef(t->peer_fd, "GET %s OSP2P\n", t->filename);
 
 	// Open disk file for the result.
@@ -556,6 +561,7 @@ static void task_download(task_t *t, task_t *tracker_task)
 	// Read the file into the task buffer from the peer,
 	// and write it from the task buffer onto disk.
 	while (1) {
+		//socket here!
 		int ret = read_to_taskbuf(t->peer_fd, t);
 		if (ret == TBUF_ERROR) {
 			error("* Peer read error");
@@ -563,7 +569,7 @@ static void task_download(task_t *t, task_t *tracker_task)
 		} else if (ret == TBUF_END && t->head == t->tail)
 			/* End of file */
 			break;
-
+		//This function doesn't call socket
 		ret = write_from_taskbuf(t->disk_fd, t);
 		if (ret == TBUF_ERROR) {
 			error("* Disk write error");
@@ -578,6 +584,7 @@ static void task_download(task_t *t, task_t *tracker_task)
 		// Inform the tracker that we now have the file,
 		// and can serve it to others!  (But ignore tracker errors.)
 		if (strcmp(t->filename, t->disk_filename) == 0) {
+			//socket here!
 			osp2p_writef(tracker_task->peer_fd, "HAVE %s\n",
 				     t->filename);
 			(void) read_tracker_response(tracker_task);
@@ -593,6 +600,164 @@ static void task_download(task_t *t, task_t *tracker_task)
 	// recursive call
 	task_pop_peer(t);
 	task_download(t, tracker_task);
+}
+
+// task_download_parallel(t_array, ntask, tracker_task)
+// This is a parallel version of task_download(). It accepts multiple tasks
+// assigned by t_array, and download data in parallel
+static void task_download_parallel(task_t **t, size_t ntask, task_t *tracker_task)
+{
+	//if any one of them is not TASK_DOWNLOAD, it is an error!
+	//int i, ret = -1;
+	//assert((!t || t->type == TASK_DOWNLOAD)
+	       //&& tracker_task->type == TASK_TRACKER);
+	size_t i, j; 
+	int ret = -1;
+	assert(tracker_task->type == TASK_TRACKER);
+	for(i = 0; i != ntask; i++)
+		assert(!t[i] || t[i]->type == TASK_DOWNLOAD);
+	
+
+	// Quit if no peers, and skip this peer
+	for(i = 0; i != ntask; i++)
+		if (!t[i] || !t[i]->peer_list) {
+			error("* No peers are willing to serve '%s'\n",
+			      (t[i] ? t[i]->filename : "that file"));
+			task_free(t[i]);
+			t[i] = NULL;
+		} else if (t[i]->peer_list->addr.s_addr == listen_addr.s_addr
+			   && t[i]->peer_list->port == listen_port) {
+			error("* IP:port is in conflict with listening socket: '%s'\n",
+			      (t[i] ? t[i]->filename : "that file"));
+			task_free(t[i]);
+			t[i] = NULL;
+		}
+	
+	// Connect to the peer and write the GET command	
+	fd_set download_set;	//used for monitoring multiple sockets
+	int maxsock = 0;
+	FD_ZERO(&download_set);
+	for(i = 0; i != ntask; i++)
+	{
+		message("* Connecting to %s:%d to download '%s'\n",
+		inet_ntoa(t[i]->peer_list->addr), t[i]->peer_list->port,
+		t[i]->filename);
+		//socket here!
+		t[i]->peer_fd = open_socket(t[i]->peer_list->addr, t[i]->peer_list->port);
+		if (t[i]->peer_fd == -1) {
+			error("* Cannot connect to peer: %s\n", strerror(errno));
+			task_free(t[i]);
+			t[i] = NULL;
+			continue;
+			//goto try_again;
+		}
+		
+		//send requests!
+		osp2p_writef(t[i]->peer_fd, "GET %s OSP2P\n", t[i]->filename);	
+		
+		// Open disk file for the result.
+		// If the filename already exists, save the file in a name like
+		// "foo.txt~1~".  However, if there are 50 local files, don't download
+		// at all.
+		for (j = 0; j < 50; j++) {
+			if (j == 0)
+				strcpy(t[i]->disk_filename, t[i]->filename);
+			else
+				sprintf(t[i]->disk_filename, "%s~%d~", t[i]->filename, (int)j);
+			t[i]->disk_fd = open(t[i]->disk_filename,
+					  O_WRONLY | O_CREAT | O_EXCL, 0666);
+			if (t[i]->disk_fd == -1 && errno != EEXIST) {
+				error("* Cannot open local file");
+				//goto try_again;
+				break;
+			} else if (t[i]->disk_fd != -1) {
+				message("* Saving result to '%s'\n", t[i]->disk_filename);
+				break;
+			}
+		}
+		if (t[i]->disk_fd == -1) {
+			if(j==50)
+				error("* Too many local files like '%s' exist already.\n\
+		* Try 'rm %s.~*~' to remove them.\n", t[i]->filename, t[i]->filename);
+			task_free(t[i]);
+			t[i] = NULL;
+			//return;
+			continue;
+		}
+		
+		//put peer socket into FD_SET. All the sockets here SHOULD work
+		if(maxsock < t[i]->peer_fd)
+			maxsock = t[i]->peer_fd;
+		FD_SET(t[i]->peer_fd, &download_set);
+	}
+	
+	
+	//call select() to monitor all sockets!
+	while(1){
+		if(select(maxsock+1, &download_set, NULL, NULL, NULL)<0){
+			error("select() error: %s\n",strerror(errno));
+			return;
+		}
+		//test whether each socket is in the set
+		
+		for(i = 0; i != ntask; i++)
+		{
+			if(t[i]!=NULL && FD_ISSET(t[i]->peer_fd, &download_set))
+			{
+				int ret = read_to_taskbuf(t[i]->peer_fd, t[i]);
+				if (ret == TBUF_ERROR) {
+					error("* Peer read error");
+					//goto try_again;
+					task_free(t[i]);
+					t[i] = NULL;
+				} else if (ret == TBUF_END && t[i]->head == t[i]->tail){
+					/* End of file. So this task is done. */
+					if (t[i]->total_written > 0) {
+						message("* Downloaded '%s' was %lu bytes long\n",
+							t[i]->disk_filename, (unsigned long) t[i]->total_written);
+						// Inform the tracker that we now have the file,
+						// and can serve it to others!  (But ignore tracker errors.)
+						if (strcmp(t[i]->filename, t[i]->disk_filename) == 0) {
+							//socket here!
+							osp2p_writef(tracker_task->peer_fd, "HAVE %s\n",
+								     t[i]->filename);
+							(void) read_tracker_response(tracker_task);
+						}
+						task_free(t[i]);
+						t[i] = NULL;
+						continue;	
+					}				
+
+				}
+				//This function doesn't call socket
+				ret = write_from_taskbuf(t[i]->disk_fd, t[i]);
+				if (ret == TBUF_ERROR) {
+					error("* Disk write error: %s\n",t[i]->filename);
+					//goto try_again;
+					task_free(t[i]);
+					t[i] = NULL;
+					continue;
+				}
+				
+			}
+		}
+		
+		maxsock = 0;
+		FD_ZERO(&download_set);
+		for(i = 0; i != ntask; i++)
+		{
+			if(t[i]!=NULL){
+				FD_SET(t[i]->peer_fd, &download_set);
+				if(maxsock < t[i]->peer_fd)
+					maxsock = t[i]->peer_fd;
+			}
+		}
+		if(maxsock == 0)	//all data retrievals are finished
+			break;
+	}
+	
+
+	
 }
 
 
@@ -679,6 +844,130 @@ static void task_upload(task_t *t)
 	task_free(t);
 }
 
+// task_upload_parallel(listen_task)
+// This is a combination of task_listen() and task_upload(), with parallism optimization
+static void task_upload_parallel(task_t *listen_task)
+{
+	assert(listen_task->type == TASK_PEER_LISTEN);
+	
+	fd_set upload_set;	//used for monitoring multiple sockets
+	int maxsock = 0;
+	task_t* tt;
+	task_t* t[MAXNPEER];
+	size_t  ntask = 0;
+	size_t  i;
+	int ret = -1;
+	struct sockaddr_in peer_addr;
+	socklen_t peer_addrlen = sizeof(peer_addr);
+	
+	//initialize task array
+	memset(t,0,sizeof(task_t*)*MAXNPEER);
+	
+	//put listen_task into set
+	FD_SET(listen_task->peer_fd, &upload_set);
+	maxsock = listen_task->peer_fd;
+	
+	
+	while(1){
+		if(select(maxsock+1, &upload_set, NULL, NULL, NULL)<0){
+			error("task_upload_parallel: select error: %s\n",strerror(errno));
+			return;
+		}
+		
+		if(FD_ISSET(listen_task->peer_fd, &upload_set))//new request
+		{
+			int fd = accept(listen_task->peer_fd,
+		    (struct sockaddr *) &peer_addr, &peer_addrlen);
+			if (fd == -1 && (errno == EINTR || errno == EAGAIN
+					 || errno == EWOULDBLOCK)){
+				error("accept error\n");
+			}
+			else if (fd == -1)
+				die("accept error\n");
+				
+			message("* Got connection from %s:%d\n",
+			inet_ntoa(peer_addr.sin_addr), ntohs(peer_addr.sin_port));
+
+			tt = task_new(TASK_UPLOAD);
+			tt->peer_fd = fd;
+			t[ntask%MAXNPEER] = tt;
+			ntask++;
+		}
+		//test other sockets
+		for(i=0;i!=MAXNPEER;i++)
+		{
+			if(t[i]!=0)
+			{
+				if(FD_ISSET(t[i]->peer_fd, &upload_set))
+				{
+					//first read peer's request
+					ret = read_to_taskbuf(t[i]->peer_fd, t[i]);
+					if (ret == TBUF_ERROR) {
+						error("* Cannot read from connection");
+						task_free(t[i]);
+						t[i] = NULL;
+						continue;
+					} 
+					else if (ret == TBUF_END 
+					|| (t[i]->tail && t[i]->buf[t[i]->tail-1] == '\n')){
+						
+						 //end of request: send data
+						 assert(t[i]->head == 0);
+						 if (osp2p_snscanf(t[i]->buf, t[i]->tail, "GET %s OSP2P\n", t[i]->filename) < 0) {
+								error("* Odd request %.*s\n", t[i]->tail, t[i]->buf);
+								task_free(t[i]);
+								t[i] = NULL;
+						 }
+						 t[i]->head = t[i]->tail = 0;
+						 message("* Transferring file %s\n", t[i]->filename);
+						 while (1) {
+							ret = write_from_taskbuf(t[i]->peer_fd, t[i]);
+							if (ret == TBUF_ERROR) {
+								error("* Peer write error");
+								task_free(t[i]);
+								t[i] = NULL;
+								break;
+							}
+					
+							ret = read_to_taskbuf(t[i]->disk_fd, t[i]);
+							if (ret == TBUF_ERROR) {
+								error("* Disk read error");
+								task_free(t[i]);
+								t[i] = NULL;
+								break;
+							} else if (ret == TBUF_END && t[i]->head == t[i]->tail)
+								/* End of file */
+								break;
+						}
+						if(ret != TBUF_ERROR)
+						message("* Upload of %s complete\n", t[i]->filename);
+						
+						//free the task
+						task_free(t[i]);
+						t[i] = NULL;
+						 
+				  }
+						 
+				}
+			}
+		}
+		//reset the select
+		FD_ZERO(&upload_set);
+		FD_SET(listen_task->peer_fd, &upload_set);
+		maxsock = listen_task->peer_fd;
+		for(i=0;i!=MAXNPEER;i++)
+		{
+			if(t[i]!=NULL)
+			{
+				FD_SET(t[i]->peer_fd, &upload_set);
+				if(maxsock < t[i]->peer_fd)
+					maxsock = t[i]->peer_fd;
+			}
+		}
+		
+	}
+}
+
 
 // main(argc, argv)
 //	The main loop!
@@ -758,14 +1047,32 @@ int main(int argc, char *argv[])
 	listen_task = start_listen();
 	register_files(tracker_task, myalias);
 
+	//FIXME: we process downloads in parallel, then process uploads in parallel
+	//we DO NOT process download in parallel with uploads
+	
 	// First, download files named on command line.
-	for (; argc > 1; argc--, argv++)
-		if ((t = start_download(tracker_task, argv[1])))
-			task_download(t, tracker_task);
+	// skeleton's version
+	/*for (; argc > 1; argc--, argv++)
+		if ((t = start_download(tracker_task, argv[1])))//copy file info to t
+			task_download(t, tracker_task);	//creates socket to peers and read/write data*/
+			
+	// parallel version
+	task_t* t_array[MAXNFILE];
+	size_t ntask = 0;
+	for(; argc > 1; argc--, argv++)
+		if((t = start_download(tracker_task, argv[1])))
+		{
+			t_array[ntask] = t;
+			ntask++;
+		}
+	task_download_parallel(t_array, ntask, tracker_task);
+	
+	//skeleton code version
+	/*while ((t = task_listen(listen_task)))
+		task_upload(t);*/
 
-	// Then accept connections from other peers and upload files to them!
-	while ((t = task_listen(listen_task)))
-		task_upload(t);
+	//parallel version
+	task_upload_parallel(listen_task);
 
 	return 0;
 }
