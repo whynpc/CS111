@@ -604,7 +604,9 @@ ospfs_unlink(struct inode *dirino, struct dentry *dentry)
 	if(target->oi_ftype == OSPFS_FTYPE_SYMLINK)
 		target->oi_nlink = 0;
 	od->od_ino = 0;
-	oi->oi_nlink--;
+	
+	if (oi->oi_nlink > 0)
+		oi->oi_nlink--;
 	//if link count is equal to zero, free the block
 	if(oi->oi_nlink==0)
 	{
@@ -1113,7 +1115,7 @@ change_size(ospfs_inode_t *oi, uint32_t new_size)
 //	OSPFS only pays attention to file size changes (see change_size above).
 //	We have written this function for you -- except for file quotas.
 
-	static int
+static int
 ospfs_notify_change(struct dentry *dentry, struct iattr *attr)
 {
 	struct inode *inode = dentry->d_inode;
@@ -1748,7 +1750,8 @@ ospfs_follow_link(struct dentry *dentry, struct nameidata *nd)
  */
 
 
-static int fixer_check_super(void) {
+static int 
+fixer_check_super(void) {
 	int r = 0;
 
 	eprintk("Checking: super block\n");
@@ -1767,7 +1770,8 @@ static int fixer_check_super(void) {
 	return r;
 }
 
-static int fixer_is_legal_datab(uint32_t b) {
+static inline int 
+fixer_is_legal_datab(uint32_t b) {
 	uint32_t min_datab = ospfs_super->os_firstinob + 
 		ospfs_size2nblocks(ospfs_super->os_ninodes * OSPFS_INODESIZE) - 1;
 	if (b >= min_datab && b < ospfs_super->os_nblocks) {
@@ -1776,10 +1780,18 @@ static int fixer_is_legal_datab(uint32_t b) {
 	return 0;
 }
 
-static int fixer_check_block_usage(void) {
+static int 
+fixer_check_block_usage(void) {
 	int r = 0;
-	uint32_t i;
+	uint32_t i, b;
 	ospfs_inode_t *inode;
+
+	void *fs_bitmap = &ospfs_data[OSPFS_BLKSIZE*2];
+	void *chk_bitmap = kmalloc(OSPFS_BLKSIZE * (ospfs_super->os_firstinob - 2), GFP_ATOMIC);
+
+	for (b = 0; b < ospfs_super->os_nblocks; ++ b) {
+		bitvector_set(chk_bitmap, b);
+	}
 
 	eprintk("Checking: block usage\n");
 
@@ -1788,22 +1800,99 @@ static int fixer_check_block_usage(void) {
 		if (inode->oi_nlink > 0) {
 			uint32_t offset = 0;
 			while (offset < inode->oi_size) {
-				uint32_t *b = ospfs_inode_blockno_p(inode, offset);
-				if (b && !fixer_is_legal_datab(*b)) {
-					eprintk("Invalid data block\n");
-					// reset to 0
-					*b = 0;	
-					r = -1;
-				}
+				uint32_t *pb = ospfs_inode_blockno_p(inode, offset);
+				if (pb) {
+					if (!fixer_is_legal_datab(*pb)) {
+						eprintk("Invalid data block\n");
+						// reset to 0
+						*pb = 0;	
+						r = -1;
+					} else {
+						bitvector_clear(chk_bitmap, *pb);
+					}
+				}				
 				offset += OSPFS_BLKSIZE;
 			}
 		}
 	}
+
+	eprintk("Checking: bitmap\n");
+
+	for (b = ospfs_super->os_firstinob; b < ospfs_super->os_nblocks; ++ b) {
+		if (bitvector_test(fs_bitmap, b) && !bitvector_test(chk_bitmap, b)) {			
+			eprintk("Bitmap error\n");
+			r = -1;
+			bitvector_clear(fs_bitmap, b);
+		} else if (!bitvector_test(fs_bitmap, b) && bitvector_test(chk_bitmap, b)) {
+			eprintk("Bitmap error\n");
+			r = -1;
+			bitvector_set(fs_bitmap, b);
+		}
+	}
+
+	kfree(chk_bitmap);
 	return r;
 }
 
 
-static int fixer_check_inodes(void) {
+static inline int 
+fixer_is_legal_fsize(uint32_t fsize) {
+	if (fsize <= OSPFS_MAXFILESIZE) {
+		return 1;
+	}
+	return 0;
+}
+
+static inline int 
+fixer_is_legal_ftype(uint32_t ftype) {
+	if (ftype == OSPFS_FTYPE_REG || ftype == OSPFS_FTYPE_DIR 
+			|| ftype == OSPFS_FTYPE_SYMLINK) {
+		return 1;
+	}
+	return 0;
+}
+
+
+static void
+fixer_free_block(ospfs_inode_t *oi) {
+	void *bitmap = &ospfs_data[OSPFS_BLKSIZE*2];
+	uint32_t blockno;
+
+	// free blocks
+	for(blockno = 0; blockno != OSPFS_NDIRECT; blockno++)
+		if(oi->oi_direct[blockno]!=0 && !bitvector_test(bitmap, oi->oi_direct[blockno]))
+			bitvector_set (bitmap, oi->oi_direct[blockno]);
+	if(oi->oi_indirect!=0)
+	{
+		uint32_t *block = ospfs_block(oi->oi_indirect);
+		for(blockno = 0; blockno != OSPFS_NINDIRECT; blockno++)
+		{
+			if(block[blockno]!=0 && !bitvector_test(bitmap, block[blockno]))
+				bitvector_set (bitmap, block[blockno]);
+		}
+		oi->oi_indirect = 0;
+	}
+	if(oi->oi_indirect2!=0)
+	{
+		uint32_t *doubly_block = ospfs_block(oi->oi_indirect2);
+		uint32_t count = 0;
+		while(doubly_block[count]!=0)
+		{
+			uint32_t *block = ospfs_block(doubly_block[count]);
+			for(blockno = 0; blockno != OSPFS_NINDIRECT; blockno++)
+			{
+				if(block[blockno]!=0 && !bitvector_test(bitmap, block[blockno]))
+					bitvector_set (bitmap, block[blockno]);
+			}
+			doubly_block[count] = 0;
+			count++;
+		}
+		oi->oi_indirect2 = 0;
+	}
+}
+
+static int 
+fixer_check_inodes(void) {
 	int r = 0;
 	uint32_t i;
 	ospfs_inode_t *oi;
@@ -1815,73 +1904,81 @@ static int fixer_check_inodes(void) {
 		if (oi->oi_nlink > 0) {
 			int r_io = 0; 
 
-			if (oi->oi_size > OSPFS_MAXFILESIZE) {
+			if (!fixer_is_legal_fsize(oi->oi_size)) {
 				eprintk("Too large file\n");
 				r_io = -1;
 				r = -1;
 			}
 
-			if (oi->oi_ftype != OSPFS_FTYPE_REG && 
-					oi->oi_ftype != OSPFS_FTYPE_DIR && 
-					oi->oi_ftype != OSPFS_FTYPE_SYMLINK) {
+			if (!fixer_is_legal_ftype(oi->oi_ftype)) {
 				eprintk("Invalid file type\n");
 				r_io = -1;
 				r = -1;
 			}
 
 			// for problemetic inode, directly release it && its blocks
-			// related dir entries will be fixed in fixer_check_dir_entries()
 			if (r_io < 0) {
-				void *bitmap = &ospfs_data[OSPFS_BLKSIZE*2];
-				uint32_t blockno;
 				oi->oi_nlink = 0;
-
-				// free blocks
-				for(blockno = 0; blockno != OSPFS_NDIRECT; blockno++)
-					if(oi->oi_direct[blockno]!=0 && !bitvector_test(bitmap, oi->oi_direct[blockno]))
-						bitvector_set (bitmap, oi->oi_direct[blockno]);
-				if(oi->oi_indirect!=0)
-				{
-					uint32_t *block = ospfs_block(oi->oi_indirect);
-					for(blockno = 0; blockno != OSPFS_NINDIRECT; blockno++)
-					{
-						if(block[blockno]!=0 && !bitvector_test(bitmap, block[blockno]))
-							bitvector_set (bitmap, block[blockno]);
-					}
-					oi->oi_indirect = 0;
-				}
-				if(oi->oi_indirect2!=0)
-				{
-					uint32_t *doubly_block = ospfs_block(oi->oi_indirect2);
-					uint32_t count = 0;
-					while(doubly_block[count]!=0)
-					{
-						uint32_t *block = ospfs_block(doubly_block[count]);
-						for(blockno = 0; blockno != OSPFS_NINDIRECT; blockno++)
-						{
-							if(block[blockno]!=0 && !bitvector_test(bitmap, block[blockno]))
-								bitvector_set (bitmap, block[blockno]);
-						}
-						doubly_block[count] = 0;
-						count++;
-					}
-					oi->oi_indirect2 = 0;
-				}
-
+				fixer_free_block(oi);				
 			}
-
 		}
-
 	}
 	return r;
 }
 
 
-static int fixer_check_dir_entries(void) {
-	return 0;
+static int 
+fixer_check_dir_entries(void) {
+	int r = 0;
+	uint32_t *chk_nlink;
+	uint32_t i, entry_off;
+	ospfs_inode_t *dir_oi, *entry_oi, *oi;
+
+	eprintk("Checking dir entries\n");
+
+	chk_nlink = (uint32_t *) kmalloc(sizeof(uint32_t) * ospfs_super->os_ninodes, GFP_ATOMIC);
+	memset(chk_nlink, 0, sizeof(uint32_t) * ospfs_super->os_ninodes);
+
+	// go through all the dir entires
+	for (i = 0; i < ospfs_super->os_ninodes; i ++) {
+		dir_oi = ospfs_inode(i);
+		if (dir_oi->oi_ftype == OSPFS_FTYPE_DIR) {
+			for (entry_off = 0; entry_off < dir_oi->oi_size; entry_off += OSPFS_DIRENTRY_SIZE) {
+				ospfs_direntry_t *od = ospfs_inode_data(dir_oi, entry_off);
+				if (od->od_ino > 0) {
+					entry_oi = ospfs_inode(od->od_ino);
+					if (entry_oi->oi_nlink == 0 && (!fixer_is_legal_fsize(entry_oi->oi_size) 
+								|| !fixer_is_legal_ftype(entry_oi->oi_ftype))) {
+						eprintk("Please remove the file %s, which links to an error inode\n", od->od_name);
+					} else {
+						chk_nlink[od->od_ino] ++;
+					}				
+				}
+			}
+
+		}
+	}
+
+	for (i = 0; i < ospfs_super->os_ninodes; ++ i) {
+		oi = ospfs_inode(i);
+		if (oi->oi_nlink != chk_nlink[i]) {
+			eprintk("Mismatched nlink\n");			
+			oi->oi_nlink = chk_nlink[i];
+			if (chk_nlink[i] == 0) {
+				// free block if necessary
+				fixer_free_block(oi);			
+			}
+			r = -1;		
+		}
+	}
+
+	kfree(chk_nlink);
+
+	return r;
 }
 
-static int fixer_fix(void) {
+static int 
+fixer_fix(void) {
 	int r = 0;
 	if ((r = fixer_check_super()) < 0) {
 		// cannot fix superblcok corruption; exit directly
@@ -1894,6 +1991,10 @@ static int fixer_fix(void) {
 
 	if ((r = fixer_check_block_usage()) < 0) {
 
+	}
+
+	if ((r = fixer_check_dir_entries()) < 0) {
+	
 	}
 
 
