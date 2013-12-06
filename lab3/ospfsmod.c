@@ -1773,7 +1773,7 @@ fixer_check_super(void) {
 static inline int 
 fixer_is_legal_datab(uint32_t b) {
 	uint32_t min_datab = ospfs_super->os_firstinob + 
-		ospfs_size2nblocks(ospfs_super->os_ninodes * OSPFS_INODESIZE) - 1;
+		ospfs_size2nblocks(ospfs_super->os_ninodes * OSPFS_INODESIZE);
 	if (b >= min_datab && b < ospfs_super->os_nblocks) {
 		return 1;
 	}
@@ -1789,42 +1789,68 @@ fixer_check_block_usage(void) {
 	void *fs_bitmap = &ospfs_data[OSPFS_BLKSIZE*2];
 	void *chk_bitmap = kmalloc(OSPFS_BLKSIZE * (ospfs_super->os_firstinob - 2), GFP_ATOMIC);
 
+	uint32_t min_datab = ospfs_super->os_firstinob + 
+		ospfs_size2nblocks(ospfs_super->os_ninodes * OSPFS_INODESIZE);
+
+
 	for (b = 0; b < ospfs_super->os_nblocks; ++ b) {
 		bitvector_set(chk_bitmap, b);
 	}
 
 	eprintk("Checking: block usage\n");
 
+	// check meta data blocks (super, bitmap, inodes)
+	for (b = 0; b < min_datab; ++ b) {
+		bitvector_clear(chk_bitmap, b);
+	}
+	// check data block
 	for (i = 0; i < ospfs_super->os_ninodes; ++ i) {
 		inode = ospfs_inode(i);
-		if (inode->oi_nlink > 0) {
+		if (inode->oi_nlink > 0 && inode->oi_ftype != OSPFS_FTYPE_SYMLINK) {
 			uint32_t offset = 0;
 			while (offset < inode->oi_size) {
 				uint32_t *pb = ospfs_inode_blockno_p(inode, offset);
 				if (pb) {
 					if (!fixer_is_legal_datab(*pb)) {
-						eprintk("Invalid data block\n");
+						eprintk("Invalid data block: block %d\n", *pb);
 						// reset to 0
 						*pb = 0;	
 						r = -1;
 					} else {
+						//eprintk("Block %d ussed by inode %d (offset %d)\n", *pb, i, offset);
 						bitvector_clear(chk_bitmap, *pb);
 					}
-				}				
+				} else {
+				}	
 				offset += OSPFS_BLKSIZE;
+			}
+			if (inode->oi_indirect) {
+				bitvector_clear(chk_bitmap, inode->oi_indirect);
+			}
+			if (inode->oi_indirect2) {
+				uint32_t i;
+				bitvector_clear(chk_bitmap, inode->oi_indirect2);
+				
+				for (i = 0; i < OSPFS_BLKSIZE / sizeof(uint32_t); i ++) {
+					uint32_t *p_indir_b = ((uint32_t *) ospfs_block(inode->oi_indirect2)) + i;
+					if (*p_indir_b) {
+						bitvector_clear(chk_bitmap, *p_indir_b);
+					
+					}
+				}
 			}
 		}
 	}
 
-	eprintk("Checking: bitmap\n");
-
-	for (b = ospfs_super->os_firstinob; b < ospfs_super->os_nblocks; ++ b) {
+	eprintk("Checking: bitmap from %d\n", min_datab);
+	
+	for (b = 0; b < ospfs_super->os_nblocks; ++ b) {
 		if (bitvector_test(fs_bitmap, b) && !bitvector_test(chk_bitmap, b)) {			
-			eprintk("Bitmap error\n");
+			eprintk("Bitmap error: block %d\n", b);
 			r = -1;
 			bitvector_clear(fs_bitmap, b);
 		} else if (!bitvector_test(fs_bitmap, b) && bitvector_test(chk_bitmap, b)) {
-			eprintk("Bitmap error\n");
+			eprintk("Bitmap error: block %d\n", b);
 			r = -1;
 			bitvector_set(fs_bitmap, b);
 		}
@@ -1905,13 +1931,13 @@ fixer_check_inodes(void) {
 			int r_io = 0; 
 
 			if (!fixer_is_legal_fsize(oi->oi_size)) {
-				eprintk("Too large file\n");
+				eprintk("Too large file: inode %d\n", i);
 				r_io = -1;
 				r = -1;
 			}
 
 			if (!fixer_is_legal_ftype(oi->oi_ftype)) {
-				eprintk("Invalid file type\n");
+				eprintk("Invalid file type: inode %d\n", i);
 				r_io = -1;
 				r = -1;
 			}
@@ -1959,10 +1985,10 @@ fixer_check_dir_entries(void) {
 		}
 	}
 
-	for (i = 0; i < ospfs_super->os_ninodes; ++ i) {
+	for (i = 1; i < ospfs_super->os_ninodes; ++ i) {
 		oi = ospfs_inode(i);
-		if (oi->oi_nlink != chk_nlink[i]) {
-			eprintk("Mismatched nlink\n");			
+		if (oi->oi_ftype != OSPFS_FTYPE_DIR && oi->oi_nlink != chk_nlink[i]) {
+			eprintk("Mismatched nlink: inode %d\n", i);			
 			oi->oi_nlink = chk_nlink[i];
 			if (chk_nlink[i] == 0) {
 				// free block if necessary
@@ -1985,20 +2011,17 @@ fixer_fix(void) {
 		return r;
 	}
 
-	if ((r = fixer_check_block_usage()) < 0) {
-
+	if (fixer_check_block_usage() < 0) {
+		r = -1;
 	}
 
-	if ((r = fixer_check_block_usage()) < 0) {
-
+	if (fixer_check_inodes() < 0) {
+		r = -1;
 	}
 
-	if ((r = fixer_check_dir_entries()) < 0) {
-	
+	if (fixer_check_dir_entries() < 0) {
+		r = -1;
 	}
-
-
-	fixer_check_inodes();
 
 
 	if (r == 0) {
