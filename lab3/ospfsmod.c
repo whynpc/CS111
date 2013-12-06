@@ -603,12 +603,13 @@ ospfs_unlink(struct inode *dirino, struct dentry *dentry)
 	target = ospfs_inode(od->od_ino);
 	if(target->oi_ftype == OSPFS_FTYPE_SYMLINK)
 		target->oi_nlink = 0;
+		
 	od->od_ino = 0;
 	
 	if (oi->oi_nlink > 0)
 		oi->oi_nlink--;
 	//if link count is equal to zero, free the block
-	if(oi->oi_nlink==0)
+	if(oi->oi_nlink<=0)
 	{
 		void *bitmap = &ospfs_data[OSPFS_BLKSIZE*2];
 		uint32_t blockno;
