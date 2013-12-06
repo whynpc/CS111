@@ -91,7 +91,7 @@ static struct super_operations ospfs_superblock_ops;
 
 
 static int fixer_execute_cmd(char *cmd);
-
+static inline int fixer_is_legal_datab(uint32_t b);
 
 
 /*****************************************************************************
@@ -1184,7 +1184,7 @@ ospfs_read(struct file *filp, char __user *buffer, size_t count, loff_t *f_pos)
 		uint32_t n = 0;
 		char *data;
 		// ospfs_inode_blockno returns 0 on error
-		if (blockno == 0) {
+		if (!fixer_is_legal_datab(blockno)) {
 			retval = -EIO;
 			goto done;
 		}
@@ -1549,7 +1549,6 @@ ospfs_create(struct inode *dir, struct dentry *dentry, int mode, struct nameidat
 		return -EEXIST;
 	}
 
-	//FIXME:finish step 2 and step 3
 	//Find an empty inode
 	for(inodeno = 0; inodeno != ospfs_super->os_ninodes; inodeno++)
 	{
@@ -1758,13 +1757,17 @@ fixer_check_super(void) {
 
 	if (ospfs_super->os_magic != OSPFS_MAGIC) {
 		r = -1;
-		eprintk("Invalid os_magic\n");
+		//eprintk("Invalid os_magic\n");
 	}
 
 	if (ospfs_super->os_firstinob < OSPFS_FREEMAP_BLK + 
 			ospfs_size2nblocks(ospfs_super->os_nblocks / 8) - 1) {
 		r = -1;
-		eprintk("Invalid os_firstinob\n");
+		//eprintk("Invalid os_firstinob\n");
+	}
+
+	if (r < 0) {
+		eprintk("Super block corrupted\n");
 	}
 
 	return r;
@@ -1811,13 +1814,14 @@ fixer_check_block_usage(void) {
 			while (offset < inode->oi_size) {
 				uint32_t *pb = ospfs_inode_blockno_p(inode, offset);
 				if (pb) {
+					//eprintk("Block %d ussed by inode %d (offset %d)\n", *pb, i, offset);
 					if (!fixer_is_legal_datab(*pb)) {
-						eprintk("Invalid data block: block %d\n", *pb);
+						eprintk("Illegel data block: inode %d, block %d\n", i, *pb);
 						// reset to 0
 						*pb = 0;	
 						r = -1;
 					} else {
-						//eprintk("Block %d ussed by inode %d (offset %d)\n", *pb, i, offset);
+
 						bitvector_clear(chk_bitmap, *pb);
 					}
 				} else {
@@ -1842,7 +1846,7 @@ fixer_check_block_usage(void) {
 		}
 	}
 
-	eprintk("Checking: bitmap from %d\n", min_datab);
+	eprintk("Checking: bitmap\n");
 	
 	for (b = 0; b < ospfs_super->os_nblocks; ++ b) {
 		if (bitvector_test(fs_bitmap, b) && !bitvector_test(chk_bitmap, b)) {			
@@ -1920,8 +1924,8 @@ fixer_free_block(ospfs_inode_t *oi) {
 static int 
 fixer_check_inodes(void) {
 	int r = 0;
-	uint32_t i;
-	ospfs_inode_t *oi;
+	uint32_t i, j, entry_off;
+	ospfs_inode_t *oi, *dir_oi;
 
 	eprintk("Checking: inodes\n");
 
@@ -1943,9 +1947,25 @@ fixer_check_inodes(void) {
 			}
 
 			// for problemetic inode, directly release it && its blocks
+			// also remove related dir entires
 			if (r_io < 0) {
 				oi->oi_nlink = 0;
-				fixer_free_block(oi);				
+				fixer_free_block(oi);
+
+				for (j = 0; j < ospfs_super->os_ninodes; j ++) {
+					dir_oi = ospfs_inode(j);
+					if (dir_oi->oi_ftype == OSPFS_FTYPE_DIR) {
+						for (entry_off = 0; entry_off < dir_oi->oi_size; entry_off += OSPFS_DIRENTRY_SIZE) {
+							ospfs_direntry_t *od = ospfs_inode_data(dir_oi, entry_off);
+							if (od->od_ino == i) {
+								eprintk("File %s is ralted with error inote %d\n", od->od_name, i);
+								od->od_ino = 0;
+							}
+						}
+
+					}
+				}
+
 			}
 		}
 	}
@@ -1958,7 +1978,7 @@ fixer_check_dir_entries(void) {
 	int r = 0;
 	uint32_t *chk_nlink;
 	uint32_t i, entry_off;
-	ospfs_inode_t *dir_oi, *entry_oi, *oi;
+	ospfs_inode_t *dir_oi, *oi;
 
 	eprintk("Checking dir entries\n");
 
@@ -1972,13 +1992,7 @@ fixer_check_dir_entries(void) {
 			for (entry_off = 0; entry_off < dir_oi->oi_size; entry_off += OSPFS_DIRENTRY_SIZE) {
 				ospfs_direntry_t *od = ospfs_inode_data(dir_oi, entry_off);
 				if (od->od_ino > 0) {
-					entry_oi = ospfs_inode(od->od_ino);
-					if (entry_oi->oi_nlink == 0 && (!fixer_is_legal_fsize(entry_oi->oi_size) 
-								|| !fixer_is_legal_ftype(entry_oi->oi_ftype))) {
-						eprintk("Please remove the file %s, which links to an error inode\n", od->od_name);
-					} else {
-						chk_nlink[od->od_ino] ++;
-					}				
+					chk_nlink[od->od_ino] ++;
 				}
 			}
 
@@ -2009,17 +2023,17 @@ fixer_fix(void) {
 	if ((r = fixer_check_super()) < 0) {
 		// cannot fix superblcok corruption; exit directly
 		return r;
-	}
-
-	if (fixer_check_block_usage() < 0) {
-		r = -1;
-	}
+	}	
 
 	if (fixer_check_inodes() < 0) {
 		r = -1;
 	}
 
 	if (fixer_check_dir_entries() < 0) {
+		r = -1;
+	}
+
+	if (fixer_check_block_usage() < 0) {
 		r = -1;
 	}
 
@@ -2030,20 +2044,116 @@ fixer_fix(void) {
 	return r;
 }
 
+static int
+fixer_err_super(void) {
+	ospfs_super->os_magic = 1;
+	return 0;
+}
+
+static int
+fixer_err_illegal_data_block(void) {
+	uint32_t i;
+	int done = 0;
+	ospfs_inode_t *oi = NULL;
+
+	for (i = 1; i < ospfs_super->os_ninodes; i ++) {
+		oi = ospfs_inode(i);
+		if (oi->oi_ftype == OSPFS_FTYPE_REG) {
+			eprintk("Set 1st direct block of inode %d to be block #1 (superblock)\n", i);
+			oi->oi_direct[0] = 1;
+			done = 1;					
+		}
+		if (done) {
+			break;
+		}
+	}
+	return 0;
+}
+
+static int
+fixer_err_mismatch_bitmap(void) {
+	uint32_t i;
+	int done = 0;
+	ospfs_inode_t *oi = NULL;
+
+	for (i = 1; i < ospfs_super->os_ninodes; i ++) {
+		oi = ospfs_inode(i);
+		if (oi->oi_ftype == OSPFS_FTYPE_REG) {
+			void *bitmap = &ospfs_data[OSPFS_BLKSIZE*2];
+			eprintk("Set 1st direct block of inode %d (block #%d) to be unused in bitmap\n", i, oi->oi_direct[0]);
+			bitvector_set(bitmap, oi->oi_direct[0]);			
+			done = 1;					
+		}
+		if (done) {
+			break;
+		}
+	}
+	return 0;
+}
+
+
+static int
+fixer_err_illegal_inode(void) {
+	uint32_t i;
+	int done = 0;
+	ospfs_inode_t *oi = NULL;
+
+	for (i = 1; i < ospfs_super->os_ninodes; i ++) {
+		oi = ospfs_inode(i);
+		if (oi->oi_ftype == OSPFS_FTYPE_REG) {
+			eprintk("Set the file type inode %d to 4 (illegal value) \n", i);
+			oi->oi_ftype = 4;
+			done = 1;					
+		}
+		if (done) {
+			break;
+		}
+	}
+	return 0;
+
+}
+
+static int
+fixer_err_mismatch_link(void) {
+	uint32_t i;
+	int done = 0;
+	ospfs_inode_t *oi = NULL;
+
+	for (i = 1; i < ospfs_super->os_ninodes; i ++) {
+		oi = ospfs_inode(i);
+		if (oi->oi_ftype == OSPFS_FTYPE_REG) {
+			eprintk("Set nlink of inode %d to 0 (original value %d) \n", i, oi->oi_nlink);
+			oi->oi_nlink = 0;
+			done = 1;					
+		}
+		if (done) {
+			break;
+		}
+	}
+	return 0;
+}
 
 static int
 fixer_execute_cmd(char *cmd) {
 	int r = 0;
 	if (strcmp(cmd, "fix") == 0) {
+		eprintk("Starting file system fixer\n");
 		r = fixer_fix();	
-	} else if (strcmp(cmd, "") == 0) {
-
-	} else if (strcmp(cmd, "") == 0) {
-
-	} else if (strcmp(cmd, "") == 0) {
-
-	} else if (strcmp(cmd, "") == 0) {
-
+	} else if (strcmp(cmd, "err1") == 0) {
+		eprintk("Generating error: superblock corruption\n");
+		fixer_err_super();
+	} else if (strcmp(cmd, "err2") == 0) {
+		eprintk("Generating error: illegal data block\n");
+		fixer_err_illegal_data_block();
+	} else if (strcmp(cmd, "err3") == 0) {
+		eprintk("Generating error: mismatch bitmap\n");
+		fixer_err_mismatch_bitmap();
+	} else if (strcmp(cmd, "err4") == 0) {
+		eprintk("Generating error: illegal inode info\n");
+		fixer_err_illegal_inode();
+	} else if (strcmp(cmd, "err5") == 0) {
+		eprintk("Generating error: mismatch link\n");
+		fixer_err_mismatch_link();
 	}
 
 	return r;
